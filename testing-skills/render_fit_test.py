@@ -292,6 +292,36 @@ __FIXTURE_BOOT__
     doc.querySelector('[data-close-sheet="analytics-modal"]').click();
     await sleep(50);
 
+    // 8b. On two-pane screens the song list and chord sheet scroll independently
+    frame.style.height = "420px";
+    win.dispatchEvent(new Event("resize"));
+    await sleep(80);
+    const listPane = doc.getElementById("song-library-list");
+    const sheetPane = doc.getElementById("song-stage-container");
+    const pageScroller = doc.scrollingElement;
+    ok("Song list and chord sheet are separate scroll panes",
+       listPane.scrollHeight > listPane.clientHeight && sheetPane.scrollHeight > sheetPane.clientHeight && pageScroller.scrollHeight <= pageScroller.clientHeight + 1,
+       `list=${listPane.scrollHeight}/${listPane.clientHeight} sheet=${sheetPane.scrollHeight}/${sheetPane.clientHeight} page=${pageScroller.scrollHeight}/${pageScroller.clientHeight}`);
+    listPane.scrollTop = 40;
+    sheetPane.scrollTop = 0;
+    await sleep(30);
+    const listMovedAlone = listPane.scrollTop > 0 && sheetPane.scrollTop === 0;
+    listPane.scrollTop = 0;
+    sheetPane.scrollTop = 120;
+    await sleep(30);
+    ok("Scrolling one pane leaves the other in place", listMovedAlone && listPane.scrollTop === 0 && sheetPane.scrollTop > 0);
+    listPane.scrollTop = 40;
+    const keptListTop = listPane.scrollTop;
+    const nextSongBtn = Array.from(doc.querySelectorAll("[data-select-song]")).find((b) => !b.closest(".is-selected"));
+    nextSongBtn.click();
+    await sleep(80);
+    ok("Choosing a song keeps the list position and opens the sheet at the top",
+       doc.getElementById("song-library-list").scrollTop === keptListTop && sheetPane.scrollTop === 0,
+       `list=${doc.getElementById("song-library-list").scrollTop}/${keptListTop} sheet=${sheetPane.scrollTop}`);
+    frame.style.height = "900px";
+    win.dispatchEvent(new Event("resize"));
+    await sleep(60);
+
     // 9. Viewport Responsive Smoke Tests at 360px, 390px, and 430px (SPEC 8 & 10)
     for (const vw of [360, 390, 430]) {
       frame.style.width = vw + "px";

@@ -360,7 +360,10 @@ export function scaleLetterPagesToViewport(containerEl) {
   const scalers = Array.from(containerEl.querySelectorAll(".sheet-scaler"));
   if (!scalers.length) return;
 
-  const availWidth = Math.max(300, containerEl.clientWidth - 8);
+  // Measure inside the padding so the page is never clipped by its scroll pane.
+  const stageStyle = getComputedStyle(containerEl);
+  const paddingX = parseFloat(stageStyle.paddingLeft) + parseFloat(stageStyle.paddingRight);
+  const availWidth = Math.max(300, containerEl.clientWidth - paddingX);
   const scale = Math.min(1, availWidth / LETTER_WIDTH_PX);
 
   for (const scaler of scalers) {

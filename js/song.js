@@ -437,6 +437,7 @@ export function openSongView(song, { discardPending = false } = {}) {
     if (saved && saved.id === song.id) song = saved;
   }
   document.body.classList.remove("no-song");
+  const isDifferentSong = activeSong?.id !== song.id;
   activeSong = song;
   const prefs = song.layout_prefs || {};
   const parsed = parse(song.chordpro || "");
@@ -468,6 +469,10 @@ export function openSongView(song, { discardPending = false } = {}) {
   if (mobileLabel) mobileLabel.textContent = song.title || "Select Song";
 
   refreshSongView();
+  if (isDifferentSong) {
+    const stage = document.getElementById("song-stage-container");
+    if (stage) stage.scrollTop = 0;
+  }
 }
 
 export function refreshSongView() {

@@ -2159,6 +2159,29 @@ body.no-cloud .needs-cloud { display: none !important; }
   .perform-controls .perform-btn { padding-inline: 6px; }
 }
 
+/* Two-pane screens: the song list and the chord sheet each scroll on their own.
+   Screen-only, so printing still flows across full pages. */
+@media screen and (min-width: 861px) {
+  html, body { height: 100%; overflow: hidden; }
+  body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+  .offline-banner, .app-header, .library-search-sticky, .song-control-bar { flex: none; }
+  .auth-gate { flex: 1; min-height: 0; overflow-y: auto; align-items: safe center; }
+  .app-shell { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+  .workspace-grid { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+  .library-pane, .song-main-pane { min-height: 0; overflow: hidden; }
+  .library-drawer-body { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+  .library-filter-drawer { max-height: 45vh; overflow-y: auto; overscroll-behavior: contain; }
+  .song-library-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+  .song-library-list > * { flex-shrink: 0; }
+  .song-stage { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+  .song-stage > * { flex-shrink: 0; }
+  .song-stage:focus:not(:focus-visible) { outline: none; }
+}
+
+@media (max-width: 860px) {
+  .library-drawer-body { overscroll-behavior: contain; }
+}
+
 /* ============================================================================
    Exact 8.5x11" Letter Print Rules (@media print)
    ============================================================================ */
