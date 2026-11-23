@@ -73,6 +73,11 @@ __FIXTURE_BOOT__
   }
 
   try {
+    // 0. The empty message bar must not peek onto the screen or block taps
+    const idleToast = win.getComputedStyle(doc.getElementById("toast-bar"));
+    ok("Idle message bar is fully hidden", idleToast.visibility === "hidden" && idleToast.pointerEvents === "none",
+       `visibility=${idleToast.visibility} pointerEvents=${idleToast.pointerEvents}`);
+
     // 1. Verify per-song saved settings + Undo
     const capoSel = doc.getElementById("capo-select");
     const origCapo = capoSel.value;

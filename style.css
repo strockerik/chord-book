@@ -1838,11 +1838,18 @@ button, input, select, textarea {
   align-items: center;
   gap: 12px;
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25);
-  transition: transform 0.2s ease;
+  /* Fully hidden when idle: an empty bar is too short for the slide alone to clear the screen. */
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.2s ease, opacity 0.2s ease, visibility 0.2s;
   max-width: calc(100vw - 24px);
 }
 .toast-bar.is-visible {
   transform: translateX(-50%) translateY(0);
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
 }
 .toast-bar.is-error {
   background: #991b1b;

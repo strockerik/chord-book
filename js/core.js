@@ -1,7 +1,7 @@
 // Core utilities: Supabase initialization, Auth gate, XSS-safe esc(),
 // per-user localStorage, accessible sheets, toast + Undo, and offline write queue.
 
-export const APP_VERSION = "0.4.3";
+export const APP_VERSION = "0.4.4";
 
 export function esc(val) {
   if (val === null || val === undefined) return "";
