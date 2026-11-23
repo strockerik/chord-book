@@ -1,0 +1,860 @@
+// Main Application Entry & Song Library Controller (js/library.js)
+// Coordinates:
+// - Auth Gate (Supabase sign-in with House Index credentials + Local Demo fallback)
+// - Song Library list, search (title/artist/tags/lyrics), sort, tag & vocal-key filters
+// - Song View, Import Modal, Vocal Key Analytics Modal, Set Lists Modal, and Guide Modal
+// - Full delete + Undo (restoring song, shares, and set-list entries)
+
+import {
+  APP_VERSION,
+  esc,
+  getSupabase,
+  getCloud,
+  setCurrentUserId,
+  loadLocal,
+  saveLocal,
+  toast,
+  toastAction,
+  toastError,
+  openSheet,
+  closeSheet,
+  setupGlobalEscapeAndBackdrop,
+  queueOfflineWrite,
+  flushOfflineQueue,
+  updateOfflineBanner
+} from "./core.js";
+import {
+  getSongEffectiveKeys,
+  renderAnalyticsDashboardHTML,
+  getPinnedIdealKeys,
+  setPinnedIdealKeys
+} from "./analytics.js";
+import {
+  applyDeviceBodyAttributes,
+  getDeviceProfile,
+  setDeviceOverride
+} from "./device.js";
+import { initSongController, openSongView, openSongEditor, getActiveSong, showEmptySongStage } from "./song.js";
+import { initImportModal } from "./ai.js";
+import { initPerformanceControls } from "./perform.js";
+import { loadSetlists, renderSetlistsSheetHTML, getSetlistItems } from "./setlists.js";
+
+let songs = [];
+let searchQuery = "";
+let sortMode = "az"; // "az" | "key" | "artist" | "fit" | "recent"
+let filterTag = "";
+let filterKey = "";
+let filterCapo = "any"; // "any" | "none" | "capo"
+let filterFavoritesOnly = false;
+let filterBestVocalFit = false;
+let filterDrawerOpen = false;
+let songsLoadFailed = false;
+
+export function getSongs() {
+  return songs;
+}
+
+export async function loadSongs() {
+  const cloud = getCloud();
+  songsLoadFailed = false;
+  if (cloud) {
+    // Signed in: Supabase is the source of truth. The per-account cache covers a bad connection.
+    const cachedCloud = loadLocal("songs", null);
+    let result = { data: null, error: new Error("not loaded") };
+    try {
+      result = await cloud.from("cb_songs").select("*").order("title", { ascending: true });
+    } catch (error) {
+      result = { data: null, error };
+    }
+    if (!result.error && Array.isArray(result.data)) {
+      songs = result.data;
+      saveLocal("songs", songs);
+    } else {
+      console.error("Couldn't load songs:", result.error);
+      songs = Array.isArray(cachedCloud) ? cachedCloud : [];
+      songsLoadFailed = !Array.isArray(cachedCloud);
+      if (!songsLoadFailed) toast("Showing your saved copy. Couldn’t reach the cloud.");
+    }
+    return songs;
+  }
+
+  // Signed out: whatever this browser already holds. Song lyrics are never shipped in the public code.
+  const cached = loadLocal("songs", null);
+  songs = Array.isArray(cached) ? cached : [];
+  return songs;
+}
+
+export async function saveSong(songObj, { isUpdate = false } = {}) {
+  const idx = songs.findIndex((s) => s.id === songObj.id);
+  if (idx >= 0) {
+    songs[idx] = songObj;
+  } else {
+    songs.unshift(songObj);
+  }
+  saveLocal("songs", songs);
+  renderLibrarySidebar();
+
+  const sb = getCloud();
+  if (!sb) return;
+  try {
+    if (isUpdate && idx >= 0) {
+      const { error } = await sb.from("cb_songs").update(songObj).eq("id", songObj.id);
+      if (error) throw error;
+    } else {
+      const { error } = await sb.from("cb_songs").insert(songObj);
+      if (error) throw error;
+    }
+  } catch {
+    queueOfflineWrite({ type: isUpdate ? "update_song" : "insert_song", row: songObj });
+  }
+}
+
+export async function deleteSongWithUndo(songObj) {
+  const idx = songs.findIndex((s) => s.id === songObj.id);
+  if (idx === -1) return;
+  const [removed] = songs.splice(idx, 1);
+  // Capture cascaded setlist items so Undo restores everything (SPEC 2.4)
+  const cascadedItems = getSetlistItems().filter((it) => it.song_id === songObj.id);
+  saveLocal("songs", songs);
+
+  const sb = getCloud();
+  if (sb) {
+    try {
+      const { error } = await sb.from("cb_songs").delete().eq("id", songObj.id);
+      if (error) throw error;
+    } catch (error) {
+      console.error("Delete failed:", error);
+      toastError("Couldn’t delete that from the cloud. It may come back.");
+    }
+  }
+
+  renderLibrarySidebar();
+  if (songs.length > 0) {
+    openSongView(songs[0], { discardPending: true });
+  } else {
+    showEmptySongStage();
+  }
+
+  toastAction(`Deleted "${removed.title}"`, "Undo", async () => {
+    songs.splice(idx, 0, removed);
+    saveLocal("songs", songs);
+    if (sb) {
+      try {
+        const restored = await sb.from("cb_songs").insert(removed);
+        if (restored.error) throw restored.error;
+        for (const item of cascadedItems) {
+          const relinked = await sb.from("cb_setlist_items").insert(item);
+          if (relinked.error) throw relinked.error;
+        }
+      } catch (error) {
+        console.error("Undo failed:", error);
+        toastError("Couldn’t restore that in the cloud.");
+      }
+    }
+    renderLibrarySidebar();
+    openSongView(removed, { discardPending: true });
+  });
+}
+
+// ============================================================================
+// Library List, Search, Sort & Filter Rendering
+// ============================================================================
+function parseSearchTokens(rawQuery) {
+  const tokens = (rawQuery || "").trim().split(/\s+/).filter(Boolean);
+  const filters = { key: "", sing: "", capo: null, tag: "", words: [] };
+  for (const t of tokens) {
+    const low = t.toLowerCase();
+    if (low.startsWith("key:")) {
+      filters.key = low.slice(4);
+    } else if (low.startsWith("sing:")) {
+      filters.sing = low.slice(5);
+    } else if (low.startsWith("capo:")) {
+      const n = parseInt(low.slice(5), 10);
+      if (!isNaN(n)) filters.capo = n;
+    } else if (low.startsWith("#") && low.length > 1) {
+      filters.tag = low.slice(1);
+    } else {
+      filters.words.push(low);
+    }
+  }
+  return filters;
+}
+
+function findLyricSnippet(chordproText, phrase) {
+  if (!phrase || !chordproText) return "";
+  const lines = String(chordproText).split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("{")) continue;
+    const plain = trimmed.replace(/\[[^\]]+\]/g, "").replace(/\s+/g, " ").trim();
+    if (plain.toLowerCase().includes(phrase)) {
+      return plain.length > 52 ? plain.slice(0, 49) + "…" : plain;
+    }
+  }
+  return "";
+}
+
+function getGroupLabelForSong(song, keys, mode) {
+  if (mode === "key") {
+    return `Sing in ${keys.soundingKey}`;
+  }
+  if (mode === "artist") {
+    return (song.artist || "Unknown Artist").trim();
+  }
+  if (mode === "fit") {
+    const r = Number(song.vocal_rating || 0);
+    if (r >= 5 || song.vocal_comfort === "sweet_spot") return "Money keys";
+    if (r >= 4) return "Good fit";
+    return "Other Keys";
+  }
+  if (mode === "recent") {
+    return "Recently Updated";
+  }
+  const ch = (song.title || "?").trim().charAt(0).toUpperCase();
+  return /[A-Z]/.test(ch) ? ch : "#";
+}
+
+export function renderLibrarySidebar() {
+  const listEl = document.getElementById("song-library-list");
+  const countEl = document.getElementById("song-library-count");
+  const tagChipsEl = document.getElementById("library-tag-chips");
+  const filterDrawerEl = document.getElementById("library-filter-drawer");
+  const clearSearchBtn = document.getElementById("library-search-clear");
+  if (!listEl) return;
+
+  if (clearSearchBtn) {
+    clearSearchBtn.hidden = !searchQuery.trim();
+  }
+
+  // Collect distinct tags and sounding keys with counts
+  const tagCounts = new Map();
+  const keyCounts = new Map();
+  songs.forEach((s) => {
+    (s.tags || []).forEach((t) => tagCounts.set(t, (tagCounts.get(t) || 0) + 1));
+    const sk = getSongEffectiveKeys(s).soundingKey;
+    keyCounts.set(sk, (keyCounts.get(sk) || 0) + 1);
+  });
+
+  const activeFilterCount = (filterFavoritesOnly ? 1 : 0) + (filterBestVocalFit ? 1 : 0)
+    + (filterTag ? 1 : 0) + (filterKey ? 1 : 0) + (filterCapo !== "any" ? 1 : 0);
+
+  if (tagChipsEl) {
+    tagChipsEl.innerHTML = `
+      <button type="button" class="filter-chip ${filterDrawerOpen || activeFilterCount > 0 ? "is-active" : ""}" id="toggle-filter-drawer-btn" aria-expanded="${filterDrawerOpen ? "true" : "false"}">
+        Filter${activeFilterCount ? ` (${activeFilterCount})` : ""} ▾
+      </button>
+      ${filterFavoritesOnly ? `<button type="button" class="filter-chip is-active" data-clear-fav="1">★ Favorites ×</button>` : ""}
+      ${filterBestVocalFit ? `<button type="button" class="filter-chip is-active" data-clear-vocal="1">Sweet spot ×</button>` : ""}
+      ${filterKey ? `<button type="button" class="filter-chip is-active" data-clear-key="1">Key: ${esc(filterKey)} ×</button>` : ""}
+      ${filterCapo !== "any" ? `<button type="button" class="filter-chip is-active" data-clear-capo="1">${filterCapo === "none" ? "No capo" : "Capo"} ×</button>` : ""}
+      ${filterTag ? `<button type="button" class="filter-chip is-active" data-clear-tag="1">#${esc(filterTag)} ×</button>` : ""}
+    `;
+
+    tagChipsEl.querySelector("#toggle-filter-drawer-btn")?.addEventListener("click", () => {
+      filterDrawerOpen = !filterDrawerOpen;
+      renderLibrarySidebar();
+    });
+    const clearers = {
+      "[data-clear-fav]": () => { filterFavoritesOnly = false; },
+      "[data-clear-vocal]": () => { filterBestVocalFit = false; },
+      "[data-clear-key]": () => { filterKey = ""; },
+      "[data-clear-capo]": () => { filterCapo = "any"; },
+      "[data-clear-tag]": () => { filterTag = ""; }
+    };
+    Object.entries(clearers).forEach(([selector, clear]) => {
+      tagChipsEl.querySelector(selector)?.addEventListener("click", () => {
+        clear();
+        renderLibrarySidebar();
+      });
+    });
+  }
+
+  // Sort and every filter live in one drawer, closed by default
+  if (filterDrawerEl) {
+    filterDrawerEl.hidden = !filterDrawerOpen;
+    if (filterDrawerOpen) {
+      const sortedKeys = Array.from(keyCounts.keys()).sort();
+      const sortedTags = Array.from(tagCounts.keys()).sort();
+      const sortOptions = [["az", "A–Z"], ["key", "Singing key"], ["artist", "Artist"], ["fit", "Best vocal fit"], ["recent", "Recently saved"]];
+      filterDrawerEl.innerHTML = `
+        <div class="filter-drawer-section">
+          <label class="filter-drawer-label" for="library-sort">Sort</label>
+          <select id="library-sort" class="input-select">
+            ${sortOptions.map(([v, label]) => `<option value="${v}" ${sortMode === v ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </div>
+        <div class="filter-drawer-section">
+          <span class="filter-drawer-label">Show</span>
+          <div class="filter-drawer-pills">
+            <button type="button" class="mini-filter-pill ${filterFavoritesOnly ? "is-active" : ""}" data-pick-fav="1">★ Favorites</button>
+            <button type="button" class="mini-filter-pill ${filterBestVocalFit ? "is-active" : ""}" data-pick-vocal="1">Sweet spot</button>
+            <button type="button" class="mini-filter-pill ${filterCapo === "none" ? "is-active" : ""}" data-pick-capo="none">No capo</button>
+            <button type="button" class="mini-filter-pill ${filterCapo === "capo" ? "is-active" : ""}" data-pick-capo="capo">Capo</button>
+          </div>
+        </div>
+        <div class="filter-drawer-section">
+          <span class="filter-drawer-label">Singing key</span>
+          <div class="filter-drawer-pills">
+            ${sortedKeys.map((k) => `<button type="button" class="mini-filter-pill ${filterKey === k ? "is-active" : ""}" data-pick-key="${esc(k)}">${esc(k)} (${keyCounts.get(k)})</button>`).join("")}
+          </div>
+        </div>
+        <div class="filter-drawer-section">
+          <span class="filter-drawer-label">Tags</span>
+          <div class="filter-drawer-pills">
+            ${sortedTags.map((t) => `<button type="button" class="mini-filter-pill ${filterTag === t ? "is-active" : ""}" data-pick-tag="${esc(t)}">#${esc(t)} (${tagCounts.get(t)})</button>`).join("")}
+          </div>
+        </div>
+      `;
+
+      filterDrawerEl.querySelector("#library-sort")?.addEventListener("change", (e) => {
+        sortMode = e.target.value || "az";
+        renderLibrarySidebar();
+      });
+      filterDrawerEl.querySelector("[data-pick-fav]")?.addEventListener("click", () => {
+        filterFavoritesOnly = !filterFavoritesOnly;
+        renderLibrarySidebar();
+      });
+      filterDrawerEl.querySelector("[data-pick-vocal]")?.addEventListener("click", () => {
+        filterBestVocalFit = !filterBestVocalFit;
+        renderLibrarySidebar();
+      });
+      filterDrawerEl.querySelectorAll("[data-pick-key]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const val = btn.getAttribute("data-pick-key");
+          filterKey = filterKey === val ? "" : val;
+          renderLibrarySidebar();
+        });
+      });
+      filterDrawerEl.querySelectorAll("[data-pick-capo]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const val = btn.getAttribute("data-pick-capo");
+          filterCapo = filterCapo === val ? "any" : val;
+          renderLibrarySidebar();
+        });
+      });
+      filterDrawerEl.querySelectorAll("[data-pick-tag]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const val = btn.getAttribute("data-pick-tag");
+          filterTag = filterTag === val ? "" : val;
+          renderLibrarySidebar();
+        });
+      });
+    }
+  }
+
+  const parsedSearch = parseSearchTokens(searchQuery);
+  const textPhrase = parsedSearch.words.join(" ");
+
+  const filtered = songs.filter((s) => {
+    const eff = getSongEffectiveKeys(s);
+    if (filterFavoritesOnly && !s.is_favorite) return false;
+    if (filterBestVocalFit && s.vocal_comfort !== "sweet_spot" && (s.vocal_rating || 0) < 4) return false;
+    if (filterTag && !(s.tags || []).includes(filterTag)) return false;
+    if (filterKey && eff.soundingKey !== filterKey) return false;
+    if (filterCapo === "none" && eff.capo > 0) return false;
+    if (filterCapo === "capo" && eff.capo === 0) return false;
+
+    if (parsedSearch.key && eff.shapesKey.toLowerCase() !== parsedSearch.key && (s.key || "").toLowerCase() !== parsedSearch.key) return false;
+    if (parsedSearch.sing && eff.soundingKey.toLowerCase() !== parsedSearch.sing) return false;
+    if (parsedSearch.capo !== null && eff.capo !== parsedSearch.capo) return false;
+    if (parsedSearch.tag && !(s.tags || []).some((t) => t.toLowerCase() === parsedSearch.tag)) return false;
+
+    if (!textPhrase) return true;
+    const hay = `${s.title || ""} ${s.artist || ""} ${(s.tags || []).join(" ")} ${eff.shapesKey} ${eff.soundingKey} ${s.chordpro || ""}`.toLowerCase();
+    return hay.includes(textPhrase);
+  });
+
+  filtered.sort((a, b) => {
+    if (sortMode === "recent") {
+      return String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || ""));
+    }
+    if (sortMode === "key") {
+      const ka = getSongEffectiveKeys(a).soundingKey;
+      const kb = getSongEffectiveKeys(b).soundingKey;
+      return ka.localeCompare(kb) || a.title.localeCompare(b.title);
+    }
+    if (sortMode === "artist") {
+      return (a.artist || "").localeCompare(b.artist || "") || a.title.localeCompare(b.title);
+    }
+    if (sortMode === "fit") {
+      return (b.vocal_rating || 0) - (a.vocal_rating || 0) || a.title.localeCompare(b.title);
+    }
+    return (a.title || "").localeCompare(b.title || "");
+  });
+
+  if (countEl) {
+    countEl.textContent = `${filtered.length} song${filtered.length === 1 ? "" : "s"}`;
+  }
+
+  const currentActive = getActiveSong();
+
+  if (filtered.length === 0) {
+    listEl.innerHTML = `
+      <div class="library-empty">
+        <p>No songs match that search or filter.</p>
+        <button type="button" class="ghost-btn" id="empty-reset-btn">Clear Filters</button>
+        <button type="button" class="ghost-btn" id="empty-import-btn">＋ Add a song</button>
+      </div>
+    `;
+    listEl.querySelector("#empty-reset-btn")?.addEventListener("click", () => {
+      searchQuery = "";
+      const inp = document.getElementById("library-search");
+      if (inp) inp.value = "";
+      filterTag = "";
+      filterKey = "";
+      filterCapo = "any";
+      filterFavoritesOnly = false;
+      filterBestVocalFit = false;
+      renderLibrarySidebar();
+    });
+    listEl.querySelector("#empty-import-btn")?.addEventListener("click", (e) => {
+      openSheet("import-sheet-modal", e.currentTarget);
+    });
+    return;
+  }
+
+  // Render grouped list with sticky headers when useful
+  let lastGroup = null;
+  const rowsHtml = [];
+
+  for (const s of filtered) {
+    const k = getSongEffectiveKeys(s);
+    const isSelected = currentActive && currentActive.id === s.id;
+    const grp = getGroupLabelForSong(s, k, sortMode);
+
+    if (grp !== lastGroup) {
+      rowsHtml.push(`<div class="library-group-header">${esc(grp)}</div>`);
+      lastGroup = grp;
+    }
+
+    const lyricSnippet = textPhrase && !(s.title || "").toLowerCase().includes(textPhrase) && !(s.artist || "").toLowerCase().includes(textPhrase)
+      ? findLyricSnippet(s.chordpro, textPhrase)
+      : "";
+
+    const keyLabel = k.capo > 0
+      ? `${k.shapesKey} · Capo ${k.capo}`
+      : (k.transpose !== 0 ? `${k.writtenKey}→${k.soundingKey}` : k.shapesKey);
+
+    rowsHtml.push(`
+      <div class="song-list-card ${isSelected ? "is-selected" : ""}" data-song-id="${esc(s.id)}">
+        <button type="button" class="song-card-select" data-select-song="${esc(s.id)}">
+          <div class="song-card-top">
+            <strong class="song-card-title">${esc(s.title)}</strong>
+            <span class="song-card-key-pill" title="Shapes: ${esc(k.shapesKey)}${k.capo ? ` (Capo ${k.capo} → Sing ${k.soundingKey})` : ""}">
+              ${esc(keyLabel)}
+            </span>
+          </div>
+          <div class="song-card-bottom">
+            <span class="song-card-artist">${esc(s.artist || "Unknown artist")}</span>
+          </div>
+          ${lyricSnippet ? `<div class="song-card-lyric-hit">“${esc(lyricSnippet)}”</div>` : ""}
+        </button>
+        <button type="button" class="song-fav-btn ${s.is_favorite ? "is-fav" : ""}" data-toggle-fav="${esc(s.id)}" aria-label="Favorite ${esc(s.title)}" aria-pressed="${s.is_favorite ? "true" : "false"}">
+          ${s.is_favorite ? "★" : "☆"}
+        </button>
+      </div>
+    `);
+  }
+
+  listEl.innerHTML = rowsHtml.join("");
+
+  listEl.querySelectorAll("[data-select-song]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-select-song");
+      const song = songs.find((s) => s.id === id);
+      if (song) {
+        openSongView(song);
+        renderLibrarySidebar();
+        // Close mobile library drawer automatically so the selected song is front and center
+        const libPane = document.getElementById("library-pane");
+        const toggleBtn = document.getElementById("mobile-library-toggle-btn");
+        const actionTxt = document.getElementById("mobile-lib-action-text");
+        if (libPane && libPane.classList.contains("is-mobile-open")) {
+          libPane.classList.remove("is-mobile-open");
+          if (toggleBtn) toggleBtn.setAttribute("aria-expanded", "false");
+          if (actionTxt) actionTxt.textContent = "Songs ▾";
+        }
+      }
+    });
+  });
+
+  listEl.querySelectorAll("[data-toggle-fav]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.getAttribute("data-toggle-fav");
+      const song = songs.find((s) => s.id === id);
+      if (song) {
+        song.is_favorite = !song.is_favorite;
+        await saveSong(song, { isUpdate: true });
+      }
+    });
+  });
+}
+
+// ============================================================================
+// Boot & Auth Initialization
+// ============================================================================
+async function bootApp() {
+  const verEl = document.getElementById("app-version-pill");
+  if (verEl) verEl.textContent = `v${APP_VERSION}`;
+
+  setupGlobalEscapeAndBackdrop();
+  initPerformanceControls();
+
+  initSongController({
+    onSaveSong: saveSong,
+    onDeleteSong: deleteSongWithUndo,
+    getLibrarySongs: () => songs
+  });
+
+  initImportModal({
+    onImportReady: (draft) => {
+      openSongEditor(draft);
+    }
+  });
+
+  // Search, Clear & Compact Density controls
+  document.getElementById("library-search")?.addEventListener("input", (e) => {
+    searchQuery = e.target.value || "";
+    renderLibrarySidebar();
+  });
+
+  document.getElementById("library-search-clear")?.addEventListener("click", () => {
+    searchQuery = "";
+    const inp = document.getElementById("library-search");
+    if (inp) {
+      inp.value = "";
+      inp.focus();
+    }
+    renderLibrarySidebar();
+  });
+
+  // Device profile awareness (Phone vs Tablet vs Desktop)
+  let lastDeviceKind = applyDeviceBodyAttributes().kind;
+  window.addEventListener("resize", () => {
+    const nextKind = applyDeviceBodyAttributes().kind;
+    if (nextKind !== lastDeviceKind) {
+      lastDeviceKind = nextKind;
+      const cur = getActiveSong();
+      if (cur) openSongView(cur);
+    }
+  });
+
+  document.getElementById("device-override-select")?.addEventListener("change", (e) => {
+    const mode = e.target.value || "auto";
+    const profile = setDeviceOverride(mode);
+    lastDeviceKind = profile.kind;
+    const cur = getActiveSong();
+    if (cur) openSongView(cur);
+    toast(`Switched layout to ${profile.label}`);
+  });
+
+  // Mobile Library Drawer Toggle
+  document.getElementById("mobile-library-toggle-btn")?.addEventListener("click", (e) => {
+    const libPane = document.getElementById("library-pane");
+    const btn = e.currentTarget;
+    const actionTxt = document.getElementById("mobile-lib-action-text");
+    if (!libPane) return;
+    const isOpen = libPane.classList.toggle("is-mobile-open");
+    btn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+    if (actionTxt) actionTxt.textContent = isOpen ? "Close ▴" : "Songs ▾";
+  });
+
+  // Desktop Keyboard Shortcuts ('/' to search, '[' / ']' to transpose)
+  document.addEventListener("keydown", (e) => {
+    const tag = (e.target?.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select" || e.target?.isContentEditable) return;
+    if (!document.getElementById("perform-overlay")?.hidden) return;
+    if (document.querySelector(".modal-sheet:not([hidden])")) return;
+
+    if (e.key === "/") {
+      e.preventDefault();
+      const libPane = document.getElementById("library-pane");
+      if (libPane && !libPane.classList.contains("is-mobile-open") && window.innerWidth <= 860) {
+        document.getElementById("mobile-library-toggle-btn")?.click();
+      }
+      document.getElementById("library-search")?.focus();
+    } else if (e.key === "[") {
+      e.preventDefault();
+      document.getElementById("transpose-down-btn")?.click();
+    } else if (e.key === "]") {
+      e.preventDefault();
+      document.getElementById("transpose-up-btn")?.click();
+    }
+  });
+
+  // Header & Toolbar Buttons
+  document.getElementById("open-import-btn")?.addEventListener("click", (e) => {
+    openSheet("import-sheet-modal", e.currentTarget);
+  });
+
+  document.getElementById("new-blank-song-btn")?.addEventListener("click", () => {
+    const opener = document.getElementById("open-import-btn");
+    closeSheet("import-sheet-modal");
+    openSongEditor({
+      title: "",
+      artist: "",
+      key: "G",
+      capo: 0,
+      chordpro: `{title: New Song}\n{key: G}\n\n{start_of_verse: Verse 1}\n[G]Write your lyrics with [C]chords in [D]brackets\n{end_of_verse}`
+    }, opener);
+  });
+
+  document.getElementById("nav-analytics-btn")?.addEventListener("click", (e) => {
+    const renderAnalyticsModal = () => {
+      const body = document.getElementById("analytics-sheet-body");
+      if (!body) return;
+      body.innerHTML = renderAnalyticsDashboardHTML(songs);
+      body.querySelectorAll("[data-open-song]").forEach((row) => {
+        row.addEventListener("click", () => {
+          const sid = row.getAttribute("data-open-song");
+          const s = songs.find((x) => x.id === sid);
+          if (s) {
+            closeSheet("analytics-modal");
+            openSongView(s);
+            renderLibrarySidebar();
+          }
+        });
+      });
+      body.querySelectorAll("[data-toggle-ideal-key]").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const key = chip.getAttribute("data-toggle-ideal-key");
+          const cur = getPinnedIdealKeys(songs);
+          let next;
+          if (cur.includes(key)) {
+            if (cur.length <= 1) {
+              toastError("Keep at least one ideal singing key selected.");
+              return;
+            }
+            next = cur.filter((k) => k !== key);
+          } else {
+            next = [...cur, key];
+          }
+          setPinnedIdealKeys(next);
+          renderAnalyticsModal();
+          const active = getActiveSong();
+          if (active) openSongView(active);
+        });
+      });
+    };
+    renderAnalyticsModal();
+    openSheet("analytics-modal", e.currentTarget);
+  });
+
+  document.getElementById("nav-setlists-btn")?.addEventListener("click", async (e) => {
+    const trigger = e.currentTarget;
+    await loadSetlists();
+    renderSetlistsSheetHTML(songs, {
+      onOpenSong: (sid) => {
+        const s = songs.find((x) => x.id === sid);
+        if (s) {
+          closeSheet("setlists-modal");
+          openSongView(s);
+          renderLibrarySidebar();
+        }
+      }
+    });
+    openSheet("setlists-modal", trigger);
+  });
+
+  document.getElementById("nav-guide-btn")?.addEventListener("click", (e) => {
+    openSheet("guide-modal", e.currentTarget);
+  });
+
+  document.getElementById("nav-account-btn")?.addEventListener("click", (e) => {
+    openSheet("account-modal", e.currentTarget);
+  });
+
+  // Close buttons on modal sheets
+  document.querySelectorAll("[data-close-sheet]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      closeSheet(btn.getAttribute("data-close-sheet"));
+    });
+  });
+
+  // Backup JSON Export inside Account sheet
+  document.getElementById("export-json-backup-btn")?.addEventListener("click", () => {
+    const payload = {
+      exported_at: new Date().toISOString(),
+      version: APP_VERSION,
+      songs
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `chord-book-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    toast("Backup downloaded");
+  });
+
+  // Online / Offline listeners
+  window.addEventListener("online", () => {
+    flushOfflineQueue();
+  });
+  window.addEventListener("offline", updateOfflineBanner);
+  updateOfflineBanner();
+
+  // Register Service Worker
+  if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  }
+
+  // Auth setup
+  await initAuthAndLoadData();
+}
+
+async function initAuthAndLoadData() {
+  const sb = getSupabase();
+  const authGate = document.getElementById("auth-gate");
+  const appShell = document.getElementById("app-shell");
+  const accountEmailEl = document.getElementById("account-user-email");
+
+  const signInOutBtn = document.getElementById("account-signout-btn");
+  const moveLocalBtn = document.getElementById("account-move-local-btn");
+
+  // Songs added while signed out on this device, not yet in this account.
+  const localOnlySongs = () => {
+    let local = [];
+    try {
+      local = JSON.parse(localStorage.getItem("cb:local:songs") || "[]");
+    } catch {
+      local = [];
+    }
+    const inAccount = new Set(songs.map((s) => (s.title || "").trim().toLowerCase()));
+    return local.filter((s) => !String(s.id).startsWith("seed-") && !inAccount.has((s.title || "").trim().toLowerCase()));
+  };
+
+  const refreshMoveLocalBtn = () => {
+    if (!moveLocalBtn) return;
+    const count = getCloud() ? localOnlySongs().length : 0;
+    moveLocalBtn.hidden = count === 0;
+    moveLocalBtn.textContent = `Add ${count} song${count === 1 ? "" : "s"} from this device`;
+  };
+
+  moveLocalBtn?.addEventListener("click", async () => {
+    const cloud = getCloud();
+    if (!cloud) return;
+    let added = 0;
+    for (const song of localOnlySongs()) {
+      const { user_id: _owner, ...fields } = song;
+      const row = { ...fields, id: crypto.randomUUID() };
+      const { error } = await cloud.from("cb_songs").insert(row);
+      if (error) {
+        console.error("Couldn't copy song:", error);
+        toastError(`Couldn’t add "${song.title}".`);
+        break;
+      }
+      songs.push(row);
+      added += 1;
+    }
+    saveLocal("songs", songs);
+    renderLibrarySidebar();
+    refreshMoveLocalBtn();
+    if (added) toast(`Added ${added} song${added === 1 ? "" : "s"} to your account`);
+  });
+
+  const enterAppAs = async (user) => {
+    setCurrentUserId(user?.id || "local");
+    const signedIn = !!getCloud();
+    document.body.classList.toggle("no-cloud", !signedIn);
+    if (signInOutBtn) signInOutBtn.textContent = signedIn ? "Sign out" : "Sign in";
+    if (accountEmailEl) {
+      accountEmailEl.textContent = signedIn && user?.email ? user.email : "Saved on this device";
+    }
+    if (authGate) authGate.hidden = true;
+    if (appShell) appShell.hidden = false;
+
+    await loadSongs();
+    await loadSetlists();
+    renderLibrarySidebar();
+    if (songs.length > 0) {
+      openSongView(songs[0], { discardPending: true });
+      renderLibrarySidebar();
+    } else {
+      showEmptySongStage({ failed: songsLoadFailed });
+    }
+    refreshMoveLocalBtn();
+    if (signedIn) flushOfflineQueue();
+  };
+
+  // Sign-in form handler
+  const signInForm = document.getElementById("auth-signin-form");
+  if (signInForm) {
+    signInForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!sb) {
+        const noCloudErr = document.getElementById("auth-error-msg");
+        if (noCloudErr) {
+          noCloudErr.textContent = "Sign-in isn’t available right now. Try again in a moment.";
+          noCloudErr.hidden = false;
+        }
+        return;
+      }
+      const email = document.getElementById("auth-email")?.value?.trim() || "";
+      const password = document.getElementById("auth-password")?.value || "";
+      const errEl = document.getElementById("auth-error-msg");
+      if (errEl) errEl.hidden = true;
+
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
+      if (error) {
+        if (errEl) {
+          errEl.textContent = error.message || "Sign-in failed.";
+          errEl.hidden = false;
+        }
+        return;
+      }
+      await enterAppAs(data?.user);
+    });
+  }
+
+  // "Continue in Local / Offline Mode" button on Auth Gate so user can test immediately or use offline
+  document.getElementById("auth-continue-local-btn")?.addEventListener("click", async () => {
+    setCurrentUserId("local");
+    saveLocal("use_local_book", true);
+    await enterAppAs({ id: "local" });
+  });
+
+  // Sign Out button in Account modal
+  document.getElementById("account-signout-btn")?.addEventListener("click", async () => {
+    if (sb) {
+      try { await sb.auth.signOut(); } catch { /* ignore */ }
+    }
+    if (navigator.serviceWorker?.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: "WIPE_USER_CACHE" });
+    }
+    closeSheet("account-modal");
+    setCurrentUserId("local");
+    saveLocal("use_local_book", false);
+    document.body.classList.add("no-cloud");
+    if (authGate) authGate.hidden = false;
+    if (appShell) appShell.hidden = true;
+  });
+
+  // Check existing Supabase session
+  if (sb) {
+    try {
+      const { data } = await sb.auth.getSession();
+      if (data?.session?.user) {
+        await enterAppAs(data.session.user);
+        return;
+      }
+    } catch {
+      // Fall through
+    }
+  }
+
+  // Not signed in: ask once. Offline, or after choosing this device only, go straight to the local book.
+  setCurrentUserId("local");
+  if (!sb || !navigator.onLine || loadLocal("use_local_book", false)) {
+    await enterAppAs({ id: "local" });
+    return;
+  }
+  document.body.classList.add("no-cloud");
+  if (appShell) appShell.hidden = true;
+  if (authGate) authGate.hidden = false;
+}
+
+document.addEventListener("DOMContentLoaded", bootApp);

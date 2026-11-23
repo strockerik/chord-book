@@ -1,0 +1,20 @@
+# Local secrets / environment
+.env.local
+notes.md
+*.local
+
+# OS / editor
+.DS_Store
+
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+# Local backups written by scripts/backup.py
+backups/
+Chords to Add/
+
+# Live AI test result archives
+ai_test_runs/
+data/
+__*driver.html
