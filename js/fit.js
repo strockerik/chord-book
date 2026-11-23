@@ -363,6 +363,7 @@ export function scaleLetterPagesToViewport(containerEl) {
   // Measure inside the padding so the page is never clipped by its scroll pane.
   const stageStyle = getComputedStyle(containerEl);
   const paddingX = parseFloat(stageStyle.paddingLeft) + parseFloat(stageStyle.paddingRight);
+  if (!containerEl.clientWidth) return; // hidden behind the phone song list
   const availWidth = Math.max(300, containerEl.clientWidth - paddingX);
   const scale = Math.min(1, availWidth / LETTER_WIDTH_PX);
 

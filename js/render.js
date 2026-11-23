@@ -216,15 +216,16 @@ export function renderSectionHTML(sec, secIdx, opts = {}) {
 
     // Default: "above" — inline-block columns where each {chord, lyric} pair stays together across line wraps
     const hasAnyLyric = line.segments.some((s) => (s.lyric || "").trim().length > 0);
-    const segHtml = line.segments.map((seg, segIdx) => {
+    // Build the line from pieces so it can only wrap between whole words, never inside one.
+    const pieces = [];
+    line.segments.forEach((seg, segIdx) => {
       const dispChord = seg.chord
         ? formatDisplayChord(seg.chord, { semitoneDelta, targetKey, accidentalPref, nashville })
         : "";
       const rawLyric = seg.lyric || "";
-      // Preserve trailing space inside inline-block so adjacent words don't glue together
-      const lyricHtml = rawLyric
-        ? esc(rawLyric).replace(/ $/g, "&nbsp;").replace(/^ /g, "&nbsp;")
-        : (dispChord ? "&nbsp;" : "");
+      const lyricToHtml = (text) => (text
+        ? esc(text).replace(/ $/g, "&nbsp;").replace(/^ /g, "&nbsp;")
+        : (dispChord ? "&nbsp;" : ""));
       const chordOnlyClass = dispChord && !rawLyric.trim() ? " is-chord-only" : "";
       const chordCell = dispChord
         ? (alignMode && hasAnyLyric
@@ -235,17 +236,39 @@ export function renderSectionHTML(sec, secIdx, opts = {}) {
               `</span>`
             : `<button type="button" class="chord-cell" data-chord="${esc(dispChord)}">${esc(dispChord)}</button>`)
         : `<span class="chord-cell is-empty" aria-hidden="true">&nbsp;</span>`;
-      // When a chord is wider than its syllable it pushes the word apart, so mark the break: a-bide.
+
       const nextLyric = line.segments[segIdx + 1]?.lyric || "";
       const splitsWord = /[\p{L}\p{M}'’]$/u.test(rawLyric) && /^[\p{L}\p{M}'’]/u.test(nextLyric);
-      const needsDash = splitsWord && !!dispChord && estimateChordWidthEm(dispChord) > estimateLyricWidthEm(rawLyric) + 0.08;
-      const lyricCell = hasAnyLyric
+      // "the Al" + "mighty": the unfinished word travels with the chord that completes it.
+      const unfinished = splitsWord ? rawLyric.match(/^(.*\s)(\S+)$/su) : null;
+      const leadText = unfinished ? unfinished[1] : rawLyric;
+
+      // When a chord is wider than its syllable it pushes the word apart, so mark the break: a-bide.
+      const needsDash = splitsWord && !unfinished && !!dispChord && estimateChordWidthEm(dispChord) > estimateLyricWidthEm(rawLyric) + 0.08;
+      const leadCell = hasAnyLyric
         ? (needsDash
-            ? `<span class="lyric-cell has-word-break">${lyricHtml}<span class="syllable-dash">-</span></span>`
-            : `<span class="lyric-cell">${lyricHtml}</span>`)
+            ? `<span class="lyric-cell has-word-break">${lyricToHtml(leadText)}<span class="syllable-dash">-</span></span>`
+            : `<span class="lyric-cell">${lyricToHtml(leadText)}</span>`)
         : "";
-      return `<span class="cl-pair${chordOnlyClass}">${chordCell}${lyricCell}</span>`;
+      pieces.push({ html: `<span class="cl-pair${chordOnlyClass}">${chordCell}${leadCell}</span>`, joinsNext: splitsWord && !unfinished });
+      if (unfinished) {
+        pieces.push({
+          html: `<span class="cl-pair is-word-tail"><span class="chord-cell is-empty" aria-hidden="true">&nbsp;</span><span class="lyric-cell">${esc(unfinished[2])}</span></span>`,
+          joinsNext: true
+        });
+      }
     });
+
+    const segHtml = [];
+    let wordRun = [];
+    for (const piece of pieces) {
+      wordRun.push(piece.html);
+      if (!piece.joinsNext) {
+        segHtml.push(wordRun.length > 1 ? `<span class="cl-word">${wordRun.join("")}</span>` : wordRun[0]);
+        wordRun = [];
+      }
+    }
+    if (wordRun.length) segHtml.push(wordRun.join(""));
 
     linesHtml.push(
       `<div class="lyric-line${hasAnyLyric ? "" : " is-instrumental-line"}" data-line="${secIdx}-${lineIdx}">${segHtml.join("")}</div>`

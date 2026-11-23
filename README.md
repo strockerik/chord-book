@@ -80,6 +80,7 @@ python3 testing-skills/behaviour_test.py
 - The editor asks before discarding unsaved work, and an imported sheet counts as unsaved.
 - Touch targets are at least 44px, and form fields are 16px on touch screens so iOS doesn't zoom.
 - Every sheet uses the same format: title, artist, key, capo, a `Form:` line, and labeled sections. Repeated choruses print once.
+- Genre stays broad: Worship, Country & Folk, Rock & Alternative, and Pop & Other. It's stored in `layout_prefs.genre`, and a song without one is Worship.
 - On the Play screen, chords ignore taps so page turns always work. A pedal press at the end of a song moves to the next one.
 
 ---

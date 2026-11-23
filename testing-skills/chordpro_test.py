@@ -139,7 +139,8 @@ const messySheet = `{{title: QC Test}}
 
 {{start_of_verse: Verse 1}}
 [D]The lantern of harbor
-We will [C]say to[G]gether paid.[D]Now
+We sing [C]and wa[G]lked home paid.[D]Now
+A chord on a real syllable a[G]bides
 {{end_of_verse}}
 
 {{start_of_chorus: Chorus}}
@@ -149,7 +150,8 @@ const qcReport = auditChordAlignment(messySheet);
 assert("auditChordAlignment detects pickup downbeat, mid-word split, punctuation spacing, and redundant chord",
   qcReport.autoFixCount >= 4 &&
   qcReport.fixedChordpro.includes("The [D]lantern") &&
-  qcReport.fixedChordpro.includes("[G]together") &&
+  qcReport.fixedChordpro.includes("[G]walked") &&
+  qcReport.fixedChordpro.includes("a[G]bides") &&
   qcReport.fixedChordpro.includes("paid. [D]Now") &&
   !qcReport.fixedChordpro.includes("[E]we"),
   JSON.stringify(qcReport.issues)

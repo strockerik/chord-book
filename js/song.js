@@ -3,6 +3,9 @@
 
 import {
   esc,
+  saveLocal,
+  GENRES,
+  getSongGenre,
   toast,
   toastAction,
   toastError,
@@ -439,6 +442,15 @@ export function openSongView(song, { discardPending = false } = {}) {
   document.body.classList.remove("no-song");
   const isDifferentSong = activeSong?.id !== song.id;
   activeSong = song;
+  saveLocal("last_song_id", song.id);
+  // The phone song list hides the sheet, so close it before the sheet is measured.
+  const libraryPane = document.getElementById("library-pane");
+  if (libraryPane?.classList.contains("is-mobile-open")) {
+    libraryPane.classList.remove("is-mobile-open");
+    document.getElementById("mobile-library-toggle-btn")?.setAttribute("aria-expanded", "false");
+    const libraryAction = document.getElementById("mobile-lib-action-text");
+    if (libraryAction) libraryAction.textContent = "Songs ▾";
+  }
   const prefs = song.layout_prefs || {};
   const parsed = parse(song.chordpro || "");
   const profile = getDeviceProfile();
@@ -472,6 +484,7 @@ export function openSongView(song, { discardPending = false } = {}) {
   if (isDifferentSong) {
     const stage = document.getElementById("song-stage-container");
     if (stage) stage.scrollTop = 0;
+    if (window.innerWidth <= 860) window.scrollTo(0, 0);
   }
 }
 
@@ -567,6 +580,9 @@ function refreshSongToolbar(fitInfo = null) {
 
   const ratingSelect = document.getElementById("vocal-rating-select");
   if (ratingSelect) ratingSelect.value = viewState.vocalRating == null ? "" : String(viewState.vocalRating);
+
+  const columnsRow = document.getElementById("more-columns-row");
+  if (columnsRow) columnsRow.hidden = viewState.pageMode === "scroll";
 
   const bakeBtn = document.getElementById("bake-transpose-key-btn");
   if (bakeBtn) {
@@ -806,7 +822,7 @@ let editingDraft = null;
 let editorBaseline = "";
 let editorHoldsImport = false;
 
-const EDITOR_FIELD_IDS = ["edit-song-title", "edit-song-artist", "edit-song-key", "edit-song-capo", "edit-song-tags", "edit-song-notes", "edit-song-chordpro"];
+const EDITOR_FIELD_IDS = ["edit-song-title", "edit-song-artist", "edit-song-key", "edit-song-capo", "edit-song-genre", "edit-song-tags", "edit-song-notes", "edit-song-chordpro"];
 
 function editorSnapshot() {
   return JSON.stringify(EDITOR_FIELD_IDS.map((id) => document.getElementById(id)?.value ?? ""));
@@ -833,6 +849,7 @@ export function openSongEditor(songDraft = {}, triggerEl = null) {
   document.getElementById("edit-song-key").value = songDraft.key || "G";
   document.getElementById("edit-song-capo").value = String(songDraft.capo || 0);
   document.getElementById("edit-song-tags").value = (songDraft.tags || []).join(", ");
+  document.getElementById("edit-song-genre").value = getSongGenre(songDraft);
   document.getElementById("edit-song-notes").value = songDraft.notes || "";
   document.getElementById("edit-song-chordpro").value = songDraft.chordpro || "";
   editorBaseline = editorSnapshot();
@@ -877,7 +894,7 @@ function renderEditorAlignmentQualityCheck() {
       .map(
         (it) => `
         <li class="qc-issue-item">
-          <span class="qc-issue-sec">${esc(it.section)} (L${it.lineNumber}):</span>
+          <span class="qc-issue-sec">${esc(it.section)}:</span>
           <span>${esc(it.message)}</span>
         </li>
       `
@@ -1001,6 +1018,11 @@ function renderEditorVocalRangeTip() {
 }
 
 function initSongEditorEvents() {
+  const genreSelect = document.getElementById("edit-song-genre");
+  if (genreSelect) {
+    genreSelect.innerHTML = GENRES.map((g) => `<option value="${g.id}">${esc(g.label)}</option>`).join("");
+  }
+
   setSheetCloseGuard("song-editor-modal", () =>
     !editorHasUnsavedWork() || window.confirm("Discard your changes? They haven’t been saved.")
   );
@@ -1026,6 +1048,7 @@ function initSongEditorEvents() {
         .map((t) => t.trim().toLowerCase())
         .filter(Boolean);
       const notes = document.getElementById("edit-song-notes").value.trim();
+      const genre = document.getElementById("edit-song-genre").value || "worship";
       const chordpro = document.getElementById("edit-song-chordpro").value.trim();
 
       if (!title || !chordpro) {
@@ -1053,7 +1076,7 @@ function initSongEditorEvents() {
         is_favorite: !!base.is_favorite,
         vocal_rating: base.vocal_rating ?? null,
         vocal_comfort: base.vocal_comfort ?? null,
-        layout_prefs: base.layout_prefs || {
+        layout_prefs: { ...(base.layout_prefs || {
           page_mode: "1-sheet",
           columns: "auto",
           compact_chorus: false,
@@ -1061,7 +1084,7 @@ function initSongEditorEvents() {
           font_offset: 0,
           accidental_pref: "auto",
           sidebar_notes: {}
-        },
+        }), genre },
         created_at: base.created_at || now,
         updated_at: now
       };

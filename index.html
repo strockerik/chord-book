@@ -43,19 +43,19 @@
       <h1 class="brand-title">The Chord Book</h1>
       <nav class="header-nav" aria-label="Main navigation">
         <button type="button" class="header-icon-btn" id="open-import-btn">
-          <span class="header-icon" aria-hidden="true">＋</span>
+          <span class="header-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></span>
           <span class="header-caption">Add</span>
         </button>
         <button type="button" class="header-icon-btn" id="nav-setlists-btn">
-          <span class="header-icon" aria-hidden="true">♫</span>
+          <span class="header-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l11-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/></svg></span>
           <span class="header-caption">Set Lists</span>
         </button>
         <button type="button" class="header-icon-btn" id="nav-analytics-btn">
-          <span class="header-icon" aria-hidden="true">🎤</span>
+          <span class="header-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg></span>
           <span class="header-caption">My Keys</span>
         </button>
         <button type="button" class="header-icon-btn" id="nav-account-btn">
-          <span class="header-icon" aria-hidden="true">●</span>
+          <span class="header-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M5 20.5c.9-3.7 3.6-5.5 7-5.5s6.1 1.8 7 5.5"/></svg></span>
           <span class="header-caption">You</span>
         </button>
       </nav>
@@ -160,7 +160,7 @@
           <button type="button" class="step-btn" id="font-larger-btn" aria-label="Larger text">A+</button>
         </span>
       </div>
-      <div class="more-row">
+      <div class="more-row" id="more-columns-row">
         <label class="more-label" for="columns-select">Columns</label>
         <select id="columns-select" class="input-select small-select">
           <option value="auto">Auto</option>
@@ -173,6 +173,7 @@
       <label class="more-check"><span>Nashville numbers</span><input type="checkbox" id="nashville-toggle" /></label>
 
       <h4 class="more-heading">How it feels to sing</h4>
+      <div class="more-pair">
       <div class="more-row">
         <label class="more-label" for="vocal-comfort-select">Range</label>
         <select id="vocal-comfort-select" class="input-select small-select">
@@ -192,6 +193,7 @@
           <option value="2">2★ Tough</option>
           <option value="1">1★ Wrong key</option>
         </select>
+      </div>
       </div>
 
       <button type="button" class="ghost-btn danger-text more-delete" id="delete-song-btn">Delete song</button>
@@ -342,9 +344,6 @@
         <button type="button" class="sheet-close-btn" data-close-sheet="song-editor-modal" aria-label="Close editor">×</button>
       </div>
 
-      <div id="editor-vocal-range-tip" class="vocal-tip-card" hidden></div>
-      <div id="editor-alignment-qc-box" class="alignment-qc-card" hidden></div>
-
       <form id="song-editor-form" class="sheet-form">
         <div class="form-grid-4">
           <div>
@@ -367,6 +366,10 @@
 
         <div class="form-grid-2">
           <div>
+            <label class="field-label" for="edit-song-genre">Genre</label>
+            <select id="edit-song-genre" class="input-select"></select>
+          </div>
+          <div>
             <label class="field-label" for="edit-song-tags">Tags</label>
             <input type="text" id="edit-song-tags" class="input-text" placeholder="worship, acoustic" />
           </div>
@@ -381,6 +384,8 @@
         </label>
         <textarea id="edit-song-chordpro" class="input-textarea mono-textarea" rows="13" required></textarea>
         <div id="editor-validation-status" class="editor-validation is-ok"></div>
+        <div id="editor-vocal-range-tip" class="vocal-tip-card" hidden></div>
+        <div id="editor-alignment-qc-box" class="alignment-qc-card" hidden></div>
 
         <div class="sheet-panel-actions">
           <button type="submit" class="solid-btn">Save song</button>
@@ -473,7 +478,7 @@
           <option value="desktop">Desktop</option>
         </select>
 
-        <p class="account-version">Chord Book <span id="app-version-pill">v0.4.4</span> · <span id="device-mode-badge">Desktop</span></p>
+        <p class="account-version">Chord Book <span id="app-version-pill">v0.4.5</span> · <span id="device-mode-badge">Desktop</span></p>
       </div>
     </div>
   </div>

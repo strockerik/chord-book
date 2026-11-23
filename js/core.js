@@ -1,7 +1,7 @@
 // Core utilities: Supabase initialization, Auth gate, XSS-safe esc(),
 // per-user localStorage, accessible sheets, toast + Undo, and offline write queue.
 
-export const APP_VERSION = "0.4.4";
+export const APP_VERSION = "0.4.5";
 
 export function esc(val) {
   if (val === null || val === undefined) return "";
@@ -11,6 +11,19 @@ export function esc(val) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// Deliberately broad. Genre lives in layout_prefs; songs without one are Worship.
+export const GENRES = [
+  { id: "worship", label: "Worship" },
+  { id: "country", label: "Country & Folk" },
+  { id: "rock", label: "Rock & Alternative" },
+  { id: "pop", label: "Pop & Other" }
+];
+
+export function getSongGenre(song) {
+  const id = song?.layout_prefs?.genre;
+  return GENRES.some((g) => g.id === id) ? id : "worship";
 }
 
 // Per-account local storage keys (SPEC 2.4 & 9)

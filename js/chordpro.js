@@ -1018,11 +1018,23 @@ const PICKUP_WORDS = new Set([
   "the", "a", "an", "and", "in", "of", "to", "for", "on", "at", "by", "with", "from", "as", "but", "or", "is"
 ]);
 
+// True when a chord lands between two syllables rather than inside one.
+function isSyllableBreak(before, after) {
+  const left = before.toLowerCase();
+  const right = after.toLowerCase();
+  if (!/[aeiouy]/.test(left) || !/[aeiouy]/.test(right)) return false;
+  if (/^[^aeiouy]*e$/.test(right) && !/^[^aeiouy]*le$/.test(right)) return false; // silent e: pla|ce
+  if (/^(ed|es)$/.test(right)) return false;
+  if (/^[^aeiouy]*[^aeiouytd]ed$/.test(right)) return false; // wa|lked
+  if (/^[^aeiouy]*[^aeiouysxzc]es$/.test(right)) return false; // ti|mes
+  const seam = left.slice(-1) + right[0];
+  return !["ou", "ee", "oo", "ai", "oa", "au", "ei", "oi"].includes(seam);
+}
+
 /**
  * Layer 1 Quality Check: Deterministic Chord-to-Word Alignment Auditor & Auto-Fixer.
  * Scans a ChordPro string for:
- * 1. Mid-word splits after 1-2 narrow letters (`to[G]gether`, `a[Em]fraid`, `Hea[D/C]ven`) where the chord
- *    should snap cleanly to the start of the word (`[G]together`, `[Em]afraid`, `[D/C]Heaven`).
+ * 1. Chords that split a single syllable (`wa[G]lked`, `pla[C]ce`). A chord on a real syllable (`a[G]bide`) is correct.
  * 2. Redundant consecutive identical chords on a lyric line (`[E]Sing it, sing it, [E]once a[F#m]gain`).
  * 3. Weak pickup-word downbeats (`[D]The lantern of...`) where the opening chord belongs on the first content word (`The [D]lantern of...`).
  * 4. Hanging punctuation chords (`paid.[G]Word` -> `paid. [G]Word`).
@@ -1082,16 +1094,15 @@ export function auditChordAlignment(chordproText) {
 
     let line = origLine;
 
-    // Rule 1: Mid-word split after 1-3 letters where the word didn't already start with a chord
-    // e.g. `to[G]gether` -> `[G]together`, `a[Em]fraid` -> `[Em]afraid`, `Hea[D/C]ven` -> `[D/C]Heaven`
+    // Rule 1: A chord inside one syllable moves to the start of the word: `wa[G]lked` -> `[G]walked`.
     line = line.replace(/(^|[\s"'(])([A-Za-z]{1,3})\[([A-G][#b]?[^\]]*)\]([A-Za-z]{2,})/g, (full, lead, prefix, chord, suffix) => {
-      if (!isChord(chord)) return full;
+      if (!isChord(chord) || isSyllableBreak(prefix, suffix)) return full;
       const word = prefix + suffix;
       issues.push({
         lineNumber: i + 1,
         section: currentSecLabel,
         kind: "mid_word_split",
-        message: `Snap [${chord}] to the start of "${word}" (was "${prefix}[${chord}]${suffix}")`,
+        message: `Move ${chord} to the start of "${word}"`,
         before: `${prefix}[${chord}]${suffix}`,
         after: `[${chord}]${word}`
       });
@@ -1113,7 +1124,7 @@ export function auditChordAlignment(chordproText) {
             lineNumber: i + 1,
             section: currentSecLabel,
             kind: "redundant_chord",
-            message: `Remove redundant repeated [${ch}] on same line`,
+            message: `Remove the repeated ${ch}`,
             before: m[0],
             after: ""
           });
@@ -1141,7 +1152,7 @@ export function auditChordAlignment(chordproText) {
             lineNumber: i + 1,
             section: currentSecLabel,
             kind: "pickup_downbeat",
-            message: `Move downbeat [${firstChord}] from pickup word "${firstWord}" to stressed word "${secondWord}"`,
+            message: `Move ${firstChord} from "${firstWord}" to "${secondWord}"`,
             before: `[${firstChord}]${firstWord}${space}${secondWord}`,
             after: `${firstWord}${space}[${firstChord}]${secondWord}`
           });
@@ -1157,7 +1168,7 @@ export function auditChordAlignment(chordproText) {
         lineNumber: i + 1,
         section: currentSecLabel,
         kind: "punctuation_spacing",
-        message: `Add clean space after "${punct}" before [${chord}]`,
+        message: `Add a space before ${chord}`,
         before: `${punct}[${chord}]`,
         after: `${punct} [${chord}]`
       });

@@ -399,10 +399,12 @@ export function renderAnalyticsDashboardHTML(songs = []) {
   const second = data.topKeyCenters[1];
 
   const maxCount = Math.max(1, ...data.activeProfiles.map((p) => p.songCount));
+  const unratedCount = songs.filter((s) => s.vocal_rating == null && !s.vocal_comfort).length;
 
   return `
     <div class="analytics-grid">
       ${pinnedHtml}
+      ${unratedCount ? `<p class="keys-unrated-hint">${unratedCount} of ${songs.length} songs aren’t rated yet. Open a song and tap <strong>More</strong> to rate how it feels to sing.</p>` : ""}
       <div class="analytics-hero-cards">
         <div class="stat-card is-highlight">
           <span class="stat-eyebrow">Your money key</span>
@@ -416,13 +418,6 @@ export function renderAnalyticsDashboardHTML(songs = []) {
           <strong class="stat-big-val">${esc(second ? second.label : "G / Em")}</strong>
           <span class="stat-sub">
             ${second ? `${second.songCount} song${second.songCount === 1 ? "" : "s"} (${second.sweetSpotCount} in sweet spot)` : "Rate more songs to refine"}
-          </span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-eyebrow">Capo use</span>
-          <strong class="stat-big-val">${data.capoSongsCount}/${data.totalSongs} use Capo</strong>
-          <span class="stat-sub">
-            Transposed down: ${data.totalTransposeDown} • Transposed up: ${data.totalTransposeUp}
           </span>
         </div>
       </div>
@@ -455,7 +450,7 @@ export function renderAnalyticsDashboardHTML(songs = []) {
       </section>
 
       <section class="analytics-panel">
-        <h4 class="analytics-panel-title">Songs That Fit You Best (Vocal Range + Open Guitar Shapes)</h4>
+        <h4 class="analytics-panel-title">Songs that fit you best</h4>
         <div class="best-fit-songs-list">
           ${data.rankedSongs.slice(0, 8).map((item) => {
             const { song, keys, fitScore, comfort, rating } = item;

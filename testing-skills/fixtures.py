@@ -200,6 +200,8 @@ The [D]lantern of [D/C]harbor [G/B]lighthou[C]se (light[D]house)
     ),
 ]
 
+FIXTURE_SONGS[3]["layout_prefs"]["genre"] = "country"
+
 FIXTURE_SETLISTS = [{
     "id": "test-set-1",
     "name": "Test Set",

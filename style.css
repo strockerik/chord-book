@@ -2176,6 +2176,42 @@ body.no-cloud .needs-cloud { display: none !important; }
   .perform-controls .perform-btn { padding-inline: 6px; }
 }
 
+/* Words stay whole when a lyric line wraps */
+.cl-word { display: inline-flex; align-items: flex-end; white-space: nowrap; }
+.cl-pair.is-word-tail .chord-cell { width: 0; padding: 0; overflow: hidden; }
+
+/* Song list: the title gets the full width, key and capo sit beside the artist */
+.song-card-title { display: block; overflow: visible; line-height: 1.2; text-overflow: clip; white-space: normal; }
+.song-card-bottom .song-card-artist { flex: 1; min-width: 0; }
+.song-card-key-pill { white-space: nowrap; }
+
+.header-icon { display: inline-flex; }
+.header-icon svg { width: 22px; height: 22px; }
+
+/* More sheet and set lists */
+.more-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.more-pair .more-row { display: block; min-height: 0; border-bottom: none; }
+.more-pair .more-label { display: block; margin-bottom: 4px; font-size: 0.86rem; }
+.more-pair .input-select { width: 100%; }
+.setlist-item-actions .small-btn { min-width: 44px; }
+
+#song-editor-form .form-grid-2 > :nth-child(3) { grid-column: 1 / -1; }
+
+/* My Keys */
+.ideal-keys-chips .filter-chip { min-width: 44px; }
+.analytics-hero-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.keys-unrated-hint { margin: 0 0 12px; padding: 10px 12px; background: var(--indigo-soft); border-radius: 8px; color: var(--indigo); font-size: 0.9rem; }
+.stat-eyebrow, .stat-sub, .key-bar-count, .key-fit-tag, .fit-song-sub, .fit-badge, .fit-score-pill { font-size: 0.8rem; }
+
+/* Chord check is plain and readable */
+.qc-issue-item, .qc-issue-sec { font-size: 0.82rem; }
+.qc-issue-sec { font-family: var(--font-body); }
+#song-editor-form .vocal-tip-card, #song-editor-form .alignment-qc-card { margin: 10px 0 0; }
+
+@media (pointer: coarse) {
+  .chord-nudge-btn { min-width: 30px; min-height: 34px; font-size: 0.78em; }
+}
+
 /* Two-pane screens: the song list and the chord sheet each scroll on their own.
    Screen-only, so printing still flows across full pages. */
 @media screen and (min-width: 861px) {
@@ -2196,7 +2232,25 @@ body.no-cloud .needs-cloud { display: none !important; }
 }
 
 @media (max-width: 860px) {
-  .library-drawer-body { overscroll-behavior: contain; }
+  .workspace-grid { grid-template-columns: minmax(0, 1fr); }
+  /* One thing at a time: the open song list takes the screen */
+  .library-pane.is-mobile-open { border-bottom: none; }
+  .library-pane.is-mobile-open .library-drawer-body { max-height: none; overflow: visible; }
+  .library-pane.is-mobile-open ~ .song-main-pane { display: none; }
+  .library-search-sticky { min-width: 0; }
+  .form-grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .form-grid-4 > :nth-child(-n + 2) { grid-column: 1 / -1; }
+}
+
+@media (max-width: 620px) {
+  /* The song bar already names the song, so the lyrics can start higher */
+  .scroll-sheet .sheet-title { display: none; }
+  .scroll-sheet .sheet-header { flex-direction: column; gap: 6px; }
+  .scroll-sheet .sheet-artist { margin-top: 0; }
+  .scroll-sheet .sheet-meta-pills { justify-content: flex-start; gap: 4px; }
+  .scroll-sheet .meta-pill { flex-direction: row; align-items: baseline; gap: 5px; min-width: 0; padding: 2px 7px; }
+  .scroll-sheet .meta-pill-label { font-size: 0.75rem; }
+  .analytics-hero-cards { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ============================================================================

@@ -234,7 +234,16 @@ __FIXTURE_BOOT__
     filterToggleBtn.click();
     await sleep(40);
     const drawerOpened = !!filterDrawer && !filterDrawer.hidden && getComputedStyle(filterDrawer).display !== "none";
-    filterToggleBtn.click();
+    doc.querySelector('[data-pick-genre="country"]').click();
+    await sleep(30);
+    const countryCount = doc.querySelectorAll("#song-library-list .song-list-card").length;
+    doc.querySelector("[data-clear-genre]").click();
+    await sleep(30);
+    ok("Genre filter narrows the list, and songs without a genre count as Worship",
+       countryCount === 1 && doc.querySelectorAll("#song-library-list .song-list-card").length === 4 &&
+       /Worship \(3\)/.test(doc.getElementById("library-filter-drawer").textContent),
+       `country=${countryCount}`);
+    doc.getElementById("toggle-filter-drawer-btn").click();
     await sleep(30);
     const searchInput = doc.getElementById("library-search");
     const searchClear = doc.getElementById("library-search-clear");

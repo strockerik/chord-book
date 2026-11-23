@@ -198,14 +198,14 @@ __FIXTURE_BOOT__
     const origEditorPro = editorArea ? editorArea.value : "";
     let qcAutoFixed = false;
     if (editorArea) {
-      editorArea.value = origEditorPro + "\n[D]The lantern say to[G]gether";
+      editorArea.value = origEditorPro + "\n[D]The lantern wa[G]lked";
       editorArea.dispatchEvent(new Event("input", { bubbles: true }));
       await sleep(50);
       const fixBtn = doc.getElementById("editor-apply-qc-fixes-btn");
       if (fixBtn) {
         fixBtn.click();
         await sleep(50);
-        qcAutoFixed = editorArea.value.includes("The [D]lantern") && editorArea.value.includes("[G]together");
+        qcAutoFixed = editorArea.value.includes("The [D]lantern") && editorArea.value.includes("[G]walked");
       }
       editorArea.value = origEditorPro;
       editorArea.dispatchEvent(new Event("input", { bubbles: true }));
@@ -231,9 +231,11 @@ __FIXTURE_BOOT__
     ok("Confirming discard closes the editor", doc.getElementById("song-editor-modal").hidden);
     doc.getElementById("edit-song-btn").click();
     await sleep(50);
+    doc.getElementById("edit-song-genre").value = "rock";
     doc.getElementById("song-editor-form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await sleep(80);
     ok("Saving the editor keeps tempo", storedSong()?.tempo === tempoBefore && tempoBefore != null, `tempo=${storedSong()?.tempo}`);
+    ok("Editor saves the song's genre", storedSong()?.layout_prefs?.genre === "rock", storedSong()?.layout_prefs?.genre);
 
     // 5e. A pedal press at the end of a song moves to the next song in the set
     doc.getElementById("nav-setlists-btn").click();

@@ -10,6 +10,8 @@ import {
   esc,
   getSupabase,
   getCloud,
+  GENRES,
+  getSongGenre,
   setCurrentUserId,
   loadLocal,
   saveLocal,
@@ -43,6 +45,7 @@ let songs = [];
 let searchQuery = "";
 let sortMode = "az"; // "az" | "key" | "artist" | "fit" | "recent"
 let filterTag = "";
+let filterGenre = "";
 let filterKey = "";
 let filterCapo = "any"; // "any" | "none" | "capo"
 let filterFavoritesOnly = false;
@@ -229,20 +232,24 @@ export function renderLibrarySidebar() {
   // Collect distinct tags and sounding keys with counts
   const tagCounts = new Map();
   const keyCounts = new Map();
+  const genreCounts = new Map();
   songs.forEach((s) => {
+    const genre = getSongGenre(s);
+    genreCounts.set(genre, (genreCounts.get(genre) || 0) + 1);
     (s.tags || []).forEach((t) => tagCounts.set(t, (tagCounts.get(t) || 0) + 1));
     const sk = getSongEffectiveKeys(s).soundingKey;
     keyCounts.set(sk, (keyCounts.get(sk) || 0) + 1);
   });
 
   const activeFilterCount = (filterFavoritesOnly ? 1 : 0) + (filterBestVocalFit ? 1 : 0)
-    + (filterTag ? 1 : 0) + (filterKey ? 1 : 0) + (filterCapo !== "any" ? 1 : 0);
+    + (filterGenre ? 1 : 0) + (filterTag ? 1 : 0) + (filterKey ? 1 : 0) + (filterCapo !== "any" ? 1 : 0);
 
   if (tagChipsEl) {
     tagChipsEl.innerHTML = `
       <button type="button" class="filter-chip ${filterDrawerOpen || activeFilterCount > 0 ? "is-active" : ""}" id="toggle-filter-drawer-btn" aria-expanded="${filterDrawerOpen ? "true" : "false"}">
         Filter${activeFilterCount ? ` (${activeFilterCount})` : ""} ▾
       </button>
+      ${filterGenre ? `<button type="button" class="filter-chip is-active" data-clear-genre="1">${esc(GENRES.find((g) => g.id === filterGenre)?.label || "")} ×</button>` : ""}
       ${filterFavoritesOnly ? `<button type="button" class="filter-chip is-active" data-clear-fav="1">★ Favorites ×</button>` : ""}
       ${filterBestVocalFit ? `<button type="button" class="filter-chip is-active" data-clear-vocal="1">Sweet spot ×</button>` : ""}
       ${filterKey ? `<button type="button" class="filter-chip is-active" data-clear-key="1">Key: ${esc(filterKey)} ×</button>` : ""}
@@ -255,6 +262,7 @@ export function renderLibrarySidebar() {
       renderLibrarySidebar();
     });
     const clearers = {
+      "[data-clear-genre]": () => { filterGenre = ""; },
       "[data-clear-fav]": () => { filterFavoritesOnly = false; },
       "[data-clear-vocal]": () => { filterBestVocalFit = false; },
       "[data-clear-key]": () => { filterKey = ""; },
@@ -274,7 +282,10 @@ export function renderLibrarySidebar() {
     filterDrawerEl.hidden = !filterDrawerOpen;
     if (filterDrawerOpen) {
       const sortedKeys = Array.from(keyCounts.keys()).sort();
-      const sortedTags = Array.from(tagCounts.keys()).sort();
+      // Genre and Capo have their own filters, so their matching tags would only repeat them.
+      const sortedTags = Array.from(tagCounts.keys())
+        .filter((t) => !/^capo-\d+$/i.test(t) && t.toLowerCase() !== "worship")
+        .sort();
       const sortOptions = [["az", "A–Z"], ["key", "Singing key"], ["artist", "Artist"], ["fit", "Best vocal fit"], ["recent", "Recently saved"]];
       filterDrawerEl.innerHTML = `
         <div class="filter-drawer-section">
@@ -282,6 +293,12 @@ export function renderLibrarySidebar() {
           <select id="library-sort" class="input-select">
             ${sortOptions.map(([v, label]) => `<option value="${v}" ${sortMode === v ? "selected" : ""}>${label}</option>`).join("")}
           </select>
+        </div>
+        <div class="filter-drawer-section">
+          <span class="filter-drawer-label">Genre</span>
+          <div class="filter-drawer-pills">
+            ${GENRES.map((g) => `<button type="button" class="mini-filter-pill ${filterGenre === g.id ? "is-active" : ""}" data-pick-genre="${g.id}" aria-pressed="${filterGenre === g.id ? "true" : "false"}">${esc(g.label)} (${genreCounts.get(g.id) || 0})</button>`).join("")}
+          </div>
         </div>
         <div class="filter-drawer-section">
           <span class="filter-drawer-label">Show</span>
@@ -309,6 +326,13 @@ export function renderLibrarySidebar() {
       filterDrawerEl.querySelector("#library-sort")?.addEventListener("change", (e) => {
         sortMode = e.target.value || "az";
         renderLibrarySidebar();
+      });
+      filterDrawerEl.querySelectorAll("[data-pick-genre]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const val = btn.getAttribute("data-pick-genre");
+          filterGenre = filterGenre === val ? "" : val;
+          renderLibrarySidebar();
+        });
       });
       filterDrawerEl.querySelector("[data-pick-fav]")?.addEventListener("click", () => {
         filterFavoritesOnly = !filterFavoritesOnly;
@@ -347,6 +371,7 @@ export function renderLibrarySidebar() {
 
   const filtered = songs.filter((s) => {
     const eff = getSongEffectiveKeys(s);
+    if (filterGenre && getSongGenre(s) !== filterGenre) return false;
     if (filterFavoritesOnly && !s.is_favorite) return false;
     if (filterBestVocalFit && s.vocal_comfort !== "sweet_spot" && (s.vocal_rating || 0) < 4) return false;
     if (filterTag && !(s.tags || []).includes(filterTag)) return false;
@@ -400,6 +425,7 @@ export function renderLibrarySidebar() {
       searchQuery = "";
       const inp = document.getElementById("library-search");
       if (inp) inp.value = "";
+      filterGenre = "";
       filterTag = "";
       filterKey = "";
       filterCapo = "any";
@@ -440,12 +466,12 @@ export function renderLibrarySidebar() {
         <button type="button" class="song-card-select" data-select-song="${esc(s.id)}">
           <div class="song-card-top">
             <strong class="song-card-title">${esc(s.title)}</strong>
-            <span class="song-card-key-pill" title="Shapes: ${esc(k.shapesKey)}${k.capo ? ` (Capo ${k.capo} → Sing ${k.soundingKey})` : ""}">
-              ${esc(keyLabel)}
-            </span>
           </div>
           <div class="song-card-bottom">
             <span class="song-card-artist">${esc(s.artist || "Unknown artist")}</span>
+            <span class="song-card-key-pill" title="Shapes: ${esc(k.shapesKey)}${k.capo ? ` (Capo ${k.capo} → Sing ${k.soundingKey})` : ""}">
+              ${esc(keyLabel)}
+            </span>
           </div>
           ${lyricSnippet ? `<div class="song-card-lyric-hit">“${esc(lyricSnippet)}”</div>` : ""}
         </button>
@@ -465,15 +491,6 @@ export function renderLibrarySidebar() {
       if (song) {
         openSongView(song);
         renderLibrarySidebar();
-        // Close mobile library drawer automatically so the selected song is front and center
-        const libPane = document.getElementById("library-pane");
-        const toggleBtn = document.getElementById("mobile-library-toggle-btn");
-        const actionTxt = document.getElementById("mobile-lib-action-text");
-        if (libPane && libPane.classList.contains("is-mobile-open")) {
-          libPane.classList.remove("is-mobile-open");
-          if (toggleBtn) toggleBtn.setAttribute("aria-expanded", "false");
-          if (actionTxt) actionTxt.textContent = "Songs ▾";
-        }
       }
     });
   });
@@ -558,6 +575,11 @@ async function bootApp() {
     const isOpen = libPane.classList.toggle("is-mobile-open");
     btn.setAttribute("aria-expanded", isOpen ? "true" : "false");
     if (actionTxt) actionTxt.textContent = isOpen ? "Close ▴" : "Songs ▾";
+    if (isOpen) {
+      window.scrollTo(0, 0);
+    } else {
+      window.dispatchEvent(new Event("resize")); // the sheet was hidden, so re-fit it
+    }
   });
 
   // Desktop Keyboard Shortcuts ('/' to search, '[' / ']' to transpose)
@@ -771,7 +793,9 @@ async function initAuthAndLoadData() {
     await loadSetlists();
     renderLibrarySidebar();
     if (songs.length > 0) {
-      openSongView(songs[0], { discardPending: true });
+      // Come back to the song you were on, even if the phone reloaded the app.
+      const lastSongId = loadLocal("last_song_id", null);
+      openSongView(songs.find((s) => s.id === lastSongId) || songs[0], { discardPending: true });
       renderLibrarySidebar();
     } else {
       showEmptySongStage({ failed: songsLoadFailed });
