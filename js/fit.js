@@ -5,6 +5,7 @@
 
 import { esc } from "./core.js";
 import { soundingKeyFromShapes } from "./chords.js";
+import { chorusWording } from "./chordpro.js";
 import { renderSongBodyHTML, renderChordDiagramSVG } from "./render.js";
 
 // Standard US Letter at 96 CSS px/inch: 8.5in = 816px, 11in = 1056px.
@@ -32,7 +33,7 @@ export function renderAndFitSong(containerEl, songRow, viewOpts = {}) {
 
   const capo = Number(viewOpts.capo ?? songRow.capo ?? parsed.meta.capo ?? 0);
   const soundingKey = capo > 0 ? soundingKeyFromShapes(targetKey, capo) : targetKey;
-  const headerNote = songRow.notes || parsed.meta.note || "";
+  const headerNote = chorusWording(songRow.notes || parsed.meta.note || "");
   const tuning = songRow.tuning || parsed.meta.tuning || "E A D G B E";
   const isStandardTuning = /^(standard|e\s*a\s*d\s*g\s*b\s*e)$/i.test(String(tuning).trim());
 
@@ -104,57 +105,38 @@ export function renderAndFitSong(containerEl, songRow, viewOpts = {}) {
     return { pageMode: "scroll", pages: 1, fontPt: baseFontPt, columns: 1 };
   }
 
-  // Mode 2: 1-Sheet or 2-Sheet 8.5x11" Letter Layout
-  const targetPages = pageMode === "2-sheet" ? 2 : 1;
-  containerEl.className = `song-stage mode-sheet mode-${targetPages}-sheet`;
+  // Mode 2: Letter pages. A long song continues onto another page instead of being squeezed.
+  const minPages = pageMode === "2-sheet" ? 2 : 1;
+  const maxPages = Math.max(minPages, Math.min(MAX_SHEET_PAGES, sectionsToRender.length));
+  containerEl.className = `song-stage mode-sheet mode-${minPages}-sheet`;
 
-  // Split sections into 1 or 2 page buckets
-  let pageBuckets = [sectionsToRender];
-  if (targetPages === 2 && sectionsToRender.length >= 2) {
-    // Split by approximate line count midpoint
-    const totalLines = sectionsToRender.reduce((acc, s) => acc + Math.max(2, (s.sec.lines || []).length), 0);
-    let running = 0;
-    let splitIdx = Math.ceil(sectionsToRender.length / 2);
-    for (let i = 0; i < sectionsToRender.length; i++) {
-      running += Math.max(2, (sectionsToRender[i].sec.lines || []).length);
-      if (running >= totalLines / 2 && i < sectionsToRender.length - 1) {
-        splitIdx = i + 1;
-        break;
-      }
-    }
-    pageBuckets = [
-      sectionsToRender.slice(0, splitIdx),
-      sectionsToRender.slice(splitIdx)
-    ];
+  let pageBuckets = [];
+  let fitResult = null;
+  for (let count = minPages; count <= maxPages; count++) {
+    pageBuckets = splitSectionsIntoPages(sectionsToRender, count);
+    containerEl.innerHTML = `
+      <div class="sheets-deck" id="sheets-deck">
+        ${pageBuckets.map((bucket, pIdx) => `
+          <div class="sheet-scaler">
+            <article class="sheet-page" data-page-index="${pIdx + 1}">
+              ${buildSheetHeaderHTML(pIdx + 1, pageBuckets.length)}
+              ${pIdx === 0 ? diagramsHtml : ""}
+              <div class="sheet-sections-flow">
+                ${bucket.map(renderSection).join("")}
+              </div>
+            </article>
+          </div>
+        `).join("")}
+      </div>
+    `;
+    fitResult = autoFitLetterPages(Array.from(containerEl.querySelectorAll(".sheet-page")), {
+      columnsPref,
+      fontOffset,
+      canCollapse: !viewOpts.alignMode,
+      onOverflow: () => renderAndFitSong(containerEl, songRow, viewOpts)
+    });
+    if (fitResult.fits) break;
   }
-
-  // Render the fixed 816x1056px Letter page(s) inside responsive scaler wrappers
-  containerEl.innerHTML = `
-    <div class="sheets-deck" id="sheets-deck">
-      ${pageBuckets.map((bucket, pIdx) => `
-        <div class="sheet-scaler">
-          <article class="sheet-page" data-page-index="${pIdx + 1}">
-            ${buildSheetHeaderHTML(pIdx + 1, pageBuckets.length)}
-            ${pIdx === 0 ? diagramsHtml : ""}
-            <div class="sheet-sections-flow">
-              ${bucket.map(renderSection).join("")}
-            </div>
-            <footer class="sheet-footer">
-              <span>${esc(songRow.title || parsed.meta.title || "")}${capo > 0 ? ` • ${esc(targetKey)} shapes, capo ${capo} (sounds in ${esc(soundingKey)})` : ` • Key of ${esc(targetKey)}`}</span>
-              <span>Page ${pIdx + 1} of ${pageBuckets.length}</span>
-            </footer>
-          </article>
-        </div>
-      `).join("")}
-    </div>
-  `;
-
-  const pages = Array.from(containerEl.querySelectorAll(".sheet-page"));
-  const fitResult = autoFitLetterPages(pages, {
-    columnsPref,
-    fontOffset,
-    sectionCount: sectionsToRender.length
-  });
 
   scaleLetterPagesToViewport(containerEl);
   return {
@@ -164,59 +146,137 @@ export function renderAndFitSong(containerEl, songRow, viewOpts = {}) {
   };
 }
 
+/** Divides whole sections across pages by approximate length. */
+function splitSectionsIntoPages(sections, count) {
+  const pageCount = Math.min(count, Math.max(1, sections.length));
+  if (pageCount <= 1) return [sections];
+  const weights = sections.map((s) => Math.max(2, (s.sec.lines || []).length) + 1 + (s.sec.sidebarNote ? 1 : 0));
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  const pages = [];
+  let start = 0;
+  let running = 0;
+  for (let page = 1; page < pageCount; page++) {
+    const target = (total * page) / pageCount;
+    let end = start + 1;
+    running += weights[start];
+    while (end < sections.length - (pageCount - page) + 1 && running + weights[end] / 2 < target) {
+      running += weights[end];
+      end++;
+    }
+    pages.push(sections.slice(start, end));
+    start = end;
+  }
+  pages.push(sections.slice(start));
+  return pages;
+}
+
 let fitGeneration = 0;
 
+// Every sheet starts here. Extra room stays as white space; text never grows to fill it.
+export const STANDARD_SHEET_PT = 11;
+// Read while playing and singing: text stops here, then the song continues on another page.
+export const MIN_SHEET_PT = 10.5;
+export const MAX_SHEET_PAGES = 4;
+
 /**
- * Deterministic binary search over font size & spacing (and 1-column vs 2-column layout)
- * so every `.sheet-page` has `scrollHeight <= clientHeight` and `scrollWidth <= clientWidth`.
+ * Finds the first layout that fits, in order of least change to how the sheet reads:
+ * standard size -> two columns -> snugger spacing -> repeated choruses once -> wrapped lines -> slightly smaller text.
+ * If none of that fits, it reports so and the song gets another page.
+ * Also embedded in downloaded packets, so it must not reference anything outside itself.
  */
-export function autoFitLetterPages(pageEls, { columnsPref = "auto", fontOffset = 0 } = {}) {
-  if (!pageEls || !pageEls.length) return { fontPt: 12, columns: 1, fits: true };
+export function fitLadder({ targetPt, minPt, columnChoices, setType, setLayout, fits, collapseRepeats }) {
+  const spacings = [
+    { line: 1.22, row: 7, section: 18 },
+    { line: 1.16, row: 5, section: 13 }
+  ];
+  const tryAt = (pt, wrapChoices) => {
+    for (const spacing of spacings) {
+      for (const wrap of wrapChoices) {
+        for (const cols of columnChoices) {
+          setType(pt, spacing);
+          setLayout(cols, wrap);
+          if (fits()) return { pt, cols, wrap, fits: true };
+        }
+      }
+    }
+    return null;
+  };
+
+  let found = tryAt(targetPt, [false]);
+  if (!found && collapseRepeats && collapseRepeats()) found = tryAt(targetPt, [false]);
+  if (!found) found = tryAt(targetPt, [true]);
+  for (let pt = targetPt - 0.25; !found && pt >= minPt - 0.001; pt -= 0.25) {
+    found = tryAt(pt, [false, true]);
+  }
+  if (found) return found;
+
+  const lastCols = columnChoices[columnChoices.length - 1];
+  setType(minPt, spacings[1]);
+  setLayout(lastCols, true);
+  return { pt: minPt, cols: lastCols, wrap: true, fits: false };
+}
+
+/** Prints an exact repeat of a chorus once. A chorus in a new key is not a repeat. */
+export function collapseRepeatedChoruses(pages) {
+  const seen = new Set();
+  let changed = false;
+  for (const page of pages) {
+    for (const section of page.querySelectorAll(".song-section.is-chorus")) {
+      const lines = section.querySelector(".section-lines");
+      const rows = lines ? Array.from(lines.querySelectorAll(".lyric-line")) : [];
+      if (!rows.length) continue;
+      const signature = rows.map((row) => row.textContent).join("\n");
+      if (seen.has(signature)) {
+        const reminder = page.ownerDocument.createElement("div");
+        reminder.className = "song-comment";
+        reminder.textContent = "Repeat Chorus";
+        lines.replaceChildren(reminder);
+        changed = true;
+      } else {
+        seen.add(signature);
+      }
+    }
+  }
+  return changed;
+}
+
+/**
+ * Fits every `.sheet-page` at the standard text size, using the steps in fitLadder only when needed.
+ */
+export function autoFitLetterPages(pageEls, { columnsPref = "auto", fontOffset = 0, canCollapse = true, onOverflow = null } = {}) {
+  if (!pageEls || !pageEls.length) return { fontPt: STANDARD_SHEET_PT, columns: 1, fits: true };
   const myGen = ++fitGeneration;
 
-  const applyVars = (cols, fontPt) => {
-    // Derive line-gap, row-gap, and section-gap smoothly from fontPt so songs have
-    // generous breathing space between lines and between verses/choruses while singing.
-    const t = Math.max(0, Math.min(1, (fontPt - 7.5) / (13.8 - 7.5)));
-    const lineGap = (1.04 + t * 0.24).toFixed(2);
-    const rowGap = Math.round(2 + Math.pow(t, 0.85) * 6);
-    const secGap = Math.round(6 + Math.pow(t, 0.8) * 20);
-    const diagScale = (0.76 + t * 0.24).toFixed(2);
-
+  const setType = (pt, spacing) => {
     for (const p of pageEls) {
-      p.style.setProperty("--sheet-cols", String(cols));
-      p.style.setProperty("--sheet-font-size", `${fontPt.toFixed(2)}pt`);
-      p.style.setProperty("--sheet-line-gap", lineGap);
-      p.style.setProperty("--sheet-row-gap", `${rowGap}px`);
-      p.style.setProperty("--sheet-section-gap", `${secGap}px`);
-      p.style.setProperty("--sheet-diag-scale", diagScale);
-      p.classList.toggle("is-two-col", cols === 2);
+      p.style.setProperty("--sheet-font-size", `${pt.toFixed(2)}pt`);
+      p.style.setProperty("--sheet-line-gap", String(spacing.line));
+      p.style.setProperty("--sheet-row-gap", `${spacing.row}px`);
+      p.style.setProperty("--sheet-section-gap", `${spacing.section}px`);
+      p.style.setProperty("--sheet-diag-scale", "1");
     }
   };
 
-  const checkPagesFit = (bottomBuffer = 0) => {
+  const setLayout = (cols, wrap) => {
+    for (const p of pageEls) {
+      p.style.setProperty("--sheet-cols", String(cols));
+      p.classList.toggle("is-two-col", cols === 2);
+      p.classList.toggle("is-wrap-lines", wrap);
+    }
+  };
+
+  const checkPagesFit = () => {
     for (const p of pageEls) {
       if (p.scrollHeight > p.clientHeight + 1) return false;
       const flow = p.querySelector(".sheet-sections-flow");
-      const footer = p.querySelector(".sheet-footer");
       if (flow) {
         if (flow.scrollHeight > flow.clientHeight + 1) return false;
         if (flow.scrollWidth > flow.clientWidth + 2) return false;
-        // Ensure no single lyric+chord line overflows or wraps its trailing chord inside its column
-        const lines = flow.querySelectorAll(".lyric-line");
-        for (const ln of lines) {
+        for (const ln of flow.querySelectorAll(".lyric-line")) {
           if (ln.scrollWidth > ln.clientWidth + 2) return false;
           const lastPair = ln.lastElementChild;
           if (lastPair && lastPair.getBoundingClientRect().right > ln.getBoundingClientRect().right + 2) {
             return false;
-          }
-        }
-        // Also verify every section and line box sits above the footer top
-        if (footer) {
-          const footerTop = footer.getBoundingClientRect().top;
-          const secs = flow.querySelectorAll(".song-section");
-          for (const sec of secs) {
-            if (sec.getBoundingClientRect().bottom > footerTop + 1 - bottomBuffer) return false;
           }
         }
       }
@@ -224,130 +284,39 @@ export function autoFitLetterPages(pageEls, { columnsPref = "auto", fontOffset =
     return true;
   };
 
-  const findBestFontForCols = (cols) => {
-    let low = 7.0;
-    let high = 13.8;
-    let best = low;
-    for (let iter = 0; iter < 8; iter++) {
-      const mid = (low + high) / 2;
-      applyVars(cols, mid);
-      if (checkPagesFit()) {
-        best = mid;
-        low = mid;
-      } else {
-        high = mid;
-      }
-    }
-    return best;
+  const columnChoices = columnsPref === 1 || columnsPref === "1"
+    ? [1]
+    : (columnsPref === 2 || columnsPref === "2" ? [2] : [1, 2]);
+  // A− / A+ on a song moves it off the standard on purpose.
+  const targetPt = Math.max(8, Math.min(14, STANDARD_SHEET_PT + fontOffset * 0.5));
+  const runFit = () => {
+    const result = fitLadder({
+      targetPt,
+      minPt: Math.min(MIN_SHEET_PT, targetPt),
+      columnChoices,
+      setType,
+      setLayout,
+      fits: checkPagesFit,
+      collapseRepeats: canCollapse ? () => collapseRepeatedChoruses(pageEls) : null
+    });
+    for (const p of pageEls) p.classList.toggle("is-ultra-compact", !result.fits);
+    return result;
   };
 
-  let chosenCols = 1;
-  let chosenFont = 11.5;
+  const result = runFit();
 
-  if (columnsPref === 1 || columnsPref === "1") {
-    chosenCols = 1;
-    chosenFont = findBestFontForCols(1);
-  } else if (columnsPref === 2 || columnsPref === "2") {
-    chosenCols = 2;
-    chosenFont = findBestFontForCols(2);
-  } else {
-    // Auto: try 1 column first (keeps wider right-hand sidebar margin rail).
-    // If 1 column forces the font below 10.2pt, compare with 2-column mode and pick whichever gives a more readable sheet.
-    const font1 = findBestFontForCols(1);
-    if (font1 >= 10.2) {
-      chosenCols = 1;
-      chosenFont = font1;
-    } else {
-      const font2 = findBestFontForCols(2);
-      if (font2 > font1 + 0.6) {
-        chosenCols = 2;
-        chosenFont = font2;
-      } else {
-        chosenCols = 1;
-        chosenFont = font1;
-      }
-    }
-  }
-
-  // Apply user's manual font nudge while still clamping if it would overflow (unless user explicitly nudged up)
-  let finalFont = Math.max(6.8, Math.min(16.5, chosenFont + fontOffset * 0.6));
-  applyVars(chosenCols, finalFont);
-  // Step down if webfont metrics or rounding left a few pixels of overflow
-  let stepGuard = 0;
-  while (fontOffset <= 0 && !checkPagesFit() && finalFont > 6.5 && stepGuard < 12) {
-    finalFont = Math.max(6.5, finalFont - 0.3);
-    applyVars(chosenCols, finalFont);
-    stepGuard++;
-  }
-
-  // Last-resort safety net: if a massive song still exceeds page height at 6.5pt in 1-col, switch to 2-col or compact diagrams
-  if (!checkPagesFit() && chosenCols === 1 && columnsPref === "auto") {
-    chosenCols = 2;
-    finalFont = findBestFontForCols(2);
-    applyVars(chosenCols, finalFont);
-  }
-  if (!checkPagesFit()) {
-    for (const p of pageEls) {
-      p.classList.add("is-ultra-compact");
-    }
-  } else if (checkPagesFit(16)) {
-    // When a song has generous spare vertical white space on the sheet, expand both row spacing
-    // and section spacing between verses and choruses so sections and lines are easy to distinguish.
-    const tBase = Math.max(0, Math.min(1, (finalFont - 7.5) / (13.8 - 7.5)));
-    const baseLineGap = 1.04 + tBase * 0.24;
-    const baseRowGap = Math.round(2 + Math.pow(tBase, 0.85) * 6);
-    const baseSecGap = Math.round(6 + Math.pow(tBase, 0.8) * 20);
-    const maxRowGap = 12;
-    const maxSecGap = 40;
-    let sLow = 0;
-    let sHigh = 1;
-    let sBest = 0;
-    for (let i = 0; i < 6; i++) {
-      const mid = (sLow + sHigh) / 2;
-      const trialRowGap = Math.round(baseRowGap + mid * (maxRowGap - baseRowGap));
-      const trialSecGap = Math.round(baseSecGap + mid * (maxSecGap - baseSecGap));
-      const trialLineGap = (baseLineGap + mid * 0.12).toFixed(2);
-      for (const p of pageEls) {
-        p.style.setProperty("--sheet-row-gap", `${trialRowGap}px`);
-        p.style.setProperty("--sheet-section-gap", `${trialSecGap}px`);
-        p.style.setProperty("--sheet-line-gap", trialLineGap);
-      }
-      if (checkPagesFit(16)) {
-        sBest = mid;
-        sLow = mid;
-      } else {
-        sHigh = mid;
-      }
-    }
-    const finalRowGap = Math.round(baseRowGap + sBest * (maxRowGap - baseRowGap));
-    const finalSecGap = Math.round(baseSecGap + sBest * (maxSecGap - baseSecGap));
-    const finalLineGap = (baseLineGap + sBest * 0.12).toFixed(2);
-    for (const p of pageEls) {
-      p.style.setProperty("--sheet-row-gap", `${finalRowGap}px`);
-      p.style.setProperty("--sheet-section-gap", `${finalSecGap}px`);
-      p.style.setProperty("--sheet-line-gap", finalLineGap);
-    }
-  }
-
-  // Re-fit deterministically once web fonts finish loading so late font swap never causes overflow
+  // Web fonts can change line widths after the first measure.
   if (typeof document !== "undefined" && document.fonts?.ready) {
     document.fonts.ready.then(() => {
-      if (myGen !== fitGeneration) return;
-      if (!pageEls[0]?.isConnected) return;
-      let f = finalFont;
-      let g = 0;
-      while (fontOffset <= 0 && !checkPagesFit() && f > 6.5 && g < 12) {
-        f = Math.max(6.5, f - 0.25);
-        applyVars(chosenCols, f);
-        g++;
-      }
+      if (myGen !== fitGeneration || !pageEls[0]?.isConnected) return;
+      if (!checkPagesFit() && !runFit().fits && onOverflow) onOverflow();
     }).catch(() => {});
   }
 
   return {
-    fontPt: Number(finalFont.toFixed(1)),
-    columns: chosenCols,
-    fits: checkPagesFit()
+    fontPt: Number(result.pt.toFixed(2)),
+    columns: result.cols,
+    fits: result.fits
   };
 }
 

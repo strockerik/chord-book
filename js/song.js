@@ -28,7 +28,9 @@ import {
   transposeChordPro,
   auditChordAlignment,
   autoFixChordAlignment,
-  nudgeChordInChordPro
+  nudgeChordInChordPro,
+  chorusWording,
+  chorusWordingInChordPro
 } from "./chordpro.js";
 import { renderChordDiagramSVG } from "./render.js";
 import { renderAndFitSong, scaleLetterPagesToViewport } from "./fit.js";
@@ -684,7 +686,7 @@ function openSidebarNoteEditor(targetKey, secLabel, triggerEl) {
   const fallbackNote = !isNaN(secIdx) && parsed.sections[secIdx] ? parsed.sections[secIdx].sidebarNote : "";
   const fallbackKind = !isNaN(secIdx) && parsed.sections[secIdx] ? parsed.sections[secIdx].sidebarKind : "dynamic";
 
-  const textVal = existingObj?.text !== undefined ? existingObj.text : (fallbackNote || "");
+  const textVal = chorusWording(existingObj?.text !== undefined ? existingObj.text : (fallbackNote || ""));
   const kindVal = existingObj?.kind || fallbackKind || "dynamic";
 
   const titleEl = document.getElementById("sidebar-note-modal-title");
@@ -850,8 +852,8 @@ export function openSongEditor(songDraft = {}, triggerEl = null) {
   document.getElementById("edit-song-capo").value = String(songDraft.capo || 0);
   document.getElementById("edit-song-tags").value = (songDraft.tags || []).join(", ");
   document.getElementById("edit-song-genre").value = getSongGenre(songDraft);
-  document.getElementById("edit-song-notes").value = songDraft.notes || "";
-  document.getElementById("edit-song-chordpro").value = songDraft.chordpro || "";
+  document.getElementById("edit-song-notes").value = chorusWording(songDraft.notes || "");
+  document.getElementById("edit-song-chordpro").value = chorusWordingInChordPro(songDraft.chordpro || "");
   editorBaseline = editorSnapshot();
 
   updateEditorLiveValidation();

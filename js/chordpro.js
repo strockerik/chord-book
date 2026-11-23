@@ -338,7 +338,35 @@ export function parse(text) {
     meta.inferredKey = inferKeyFromChords(allChords);
   }
 
+  if (meta.note) meta.note = chorusWording(meta.note);
+  for (const sec of sections) {
+    sec.label = chorusWording(sec.label);
+    if (sec.explicitLabel !== undefined) sec.explicitLabel = chorusWording(sec.explicitLabel);
+    if (sec.sidebarNote) sec.sidebarNote = chorusWording(sec.sidebarNote);
+    for (const l of sec.lines || []) {
+      if (l.sidebarNote) l.sidebarNote = chorusWording(l.sidebarNote);
+      if (l.comment !== undefined) l.comment = chorusWording(l.comment);
+    }
+  }
+
   return { meta, sections, allChords };
+}
+
+// "Chorus" is the app's one word for this section. Only labels and notes pass through here,
+// so a lyric or title that uses the word "refrain" is left alone.
+export function chorusWording(text) {
+  return String(text ?? "").replace(/\brefrain\b/gi, (word) => {
+    if (word === word.toUpperCase()) return "CHORUS";
+    return word[0] === "R" ? "Chorus" : "chorus";
+  });
+}
+
+export function chorusWordingInChordPro(text) {
+  const labelOrNote = /^\s*\{\s*(start_of_\w+|so[cvb]|chorus|note|meta_note|song_note|comment|c)\s*[:}]/i;
+  return String(text ?? "")
+    .split("\n")
+    .map((line) => (labelOrNote.test(line) || parseStandaloneSectionHeader(line) ? chorusWording(line) : line))
+    .join("\n");
 }
 
 /**
@@ -478,7 +506,7 @@ export function parseStandaloneSectionHeader(line) {
   else if (kindRaw === "pre_chorus" || kindRaw === "prechorus") type = "pre_chorus";
   else if (kindRaw === "instrumental" || kindRaw === "interlude" || kindRaw === "solo") type = "instrumental";
   const label = inner.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
-  return { type, label: label || (DEFAULT_SECTION_LABELS[type] + num) };
+  return { type, label: chorusWording(label) || (DEFAULT_SECTION_LABELS[type] + num) };
 }
 
 /**

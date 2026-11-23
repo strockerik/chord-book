@@ -111,7 +111,7 @@ __FIXTURE_BOOT__
 
           const secGapPx = parseInt(pg?.style.getPropertyValue("--sheet-section-gap") || "0", 10);
           const rowGapPx = parseInt(pg?.style.getPropertyValue("--sheet-row-gap") || "0", 10);
-          ok("Short song expands vertical section and line-to-line row spacing into available whitespace",
+          ok("Sheet uses the standard comfortable line and section spacing",
              secGapPx >= 16 && rowGapPx >= 4,
              `secGap=${secGapPx}px rowGap=${rowGapPx}px`);
 
@@ -147,6 +147,10 @@ __FIXTURE_BOOT__
         }
 
         if (songId === "test-lantern-waltz") {
+          ok("Sheets say Chorus, never Refrain, in labels and notes",
+             !/refrain/i.test(pg?.textContent || "") &&
+             pg?.querySelector(".song-section.is-chorus .section-label")?.textContent === "Chorus",
+             pg?.querySelector(".song-section.is-chorus .section-label")?.textContent);
           const brokenWord = Array.from(pg?.querySelectorAll(".lyric-cell.has-word-break") || [])
             .find((cell) => cell.textContent === "a-");
           const dash = brokenWord?.querySelector(".syllable-dash")?.textContent || "";
@@ -172,6 +176,15 @@ __FIXTURE_BOOT__
         }
       }
     }
+
+    // 1c. Short songs stay at the standard size instead of growing to fill the page
+    const standardSizes = [];
+    for (const songId of ["test-morning-river", "test-harvest-table", "test-lantern-waltz", "test-wildflower-road"]) {
+      doc.querySelector(`[data-select-song="${songId}"]`).click();
+      await sleep(50);
+      standardSizes.push(parseFloat(doc.querySelector(".sheet-page").style.getPropertyValue("--sheet-font-size")));
+    }
+    ok("Every sheet that fits uses the same 11pt text", standardSizes.every((pt) => pt === 11), standardSizes.join(", "));
 
     // 2. Verify chords stay over their syllables (.cl-pair has .chord-cell directly above .lyric-cell)
     const pairs = Array.from(doc.querySelectorAll(".sheet-page .cl-pair")).filter(
@@ -300,6 +313,25 @@ __FIXTURE_BOOT__
     win.confirm = () => true;
     doc.querySelector('#song-editor-modal [data-close-sheet="song-editor-modal"]')?.click();
     await sleep(40);
+
+    // 7c. A long song continues on another page instead of being squeezed
+    doc.getElementById("open-import-btn").click();
+    await sleep(50);
+    const longVerses = Array.from({ length: 12 }, (_, v) =>
+      `{start_of_verse: Verse ${v + 1}}\n` +
+      Array.from({ length: 6 }, () => "[G]Walking down the long [C]country road again [D]tonight with you").join("\n") +
+      "\n{end_of_verse}").join("\n\n");
+    doc.getElementById("import-paste-text").value = `{title: Long Test Song}\n{key: G}\n\n${longVerses}`;
+    doc.getElementById("import-parse-free-btn").click();
+    await sleep(60);
+    doc.getElementById("song-editor-form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await sleep(160);
+    const longPages = Array.from(doc.querySelectorAll(".sheet-page"));
+    ok("A long song takes extra pages and keeps readable text",
+       longPages.length >= 2 &&
+       longPages.every((p) => p.scrollHeight <= p.clientHeight + 1) &&
+       longPages.every((p) => parseFloat(p.style.getPropertyValue("--sheet-font-size")) >= 10.5),
+       `pages=${longPages.length} font=${longPages[0]?.style.getPropertyValue("--sheet-font-size")}`);
 
     // 8. Test Vocal Key & Song Fit Analytics modal
     doc.getElementById("nav-analytics-btn").click();

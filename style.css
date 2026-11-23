@@ -1310,19 +1310,6 @@ button, input, select, textarea {
   color: var(--accent);
 }
 
-.sheet-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-top: 1px solid var(--line);
-  padding-top: 6px;
-  margin-top: 6px;
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  color: var(--faint);
-  flex-shrink: 0;
-}
-
 /* ============================================================================
    Modal Sheets (Import, Analytics, Editor, Set Lists, Sidebar Notes)
    ============================================================================ */
@@ -2175,6 +2162,22 @@ body.no-cloud .needs-cloud { display: none !important; }
   }
   .perform-controls .perform-btn { padding-inline: 6px; }
 }
+
+/* Slim page margins and header: the page belongs to the song */
+.sheet-page { padding: 24px 30px 20px; }
+.sheet-page .sheet-header { gap: 10px; padding-bottom: 5px; margin-bottom: 10px; }
+.sheet-page .sheet-title-block { flex: 1; min-width: 0; }
+.sheet-page .sheet-title { font-size: 1.4rem; }
+.sheet-page .sheet-artist,
+.sheet-page .sheet-header-note { display: inline; margin: 0; font-size: 0.82rem; }
+.sheet-page .sheet-artist + .sheet-header-note::before { content: " · "; font-style: normal; }
+.sheet-page .sheet-meta-pills { flex-shrink: 0; flex-wrap: nowrap; gap: 4px; }
+.sheet-page .meta-pill { flex-direction: row; align-items: baseline; gap: 4px; min-width: 0; padding: 2px 6px; white-space: nowrap; }
+.sheet-page .meta-pill-label { font-size: 0.62rem; }
+.sheet-page .meta-pill-val { font-size: 0.8rem; }
+
+/* Long lines may wrap on a full sheet instead of shrinking the text */
+.sheet-page.is-wrap-lines .lyric-line { flex-wrap: wrap; }
 
 /* Words stay whole when a lyric line wraps */
 .cl-word { display: inline-flex; align-items: flex-end; white-space: nowrap; }

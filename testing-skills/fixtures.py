@@ -123,7 +123,7 @@ And the [A]fire burning [B]low
     song(
         "test-lantern-waltz", "Lantern Waltz", "C", 1, 112, "3/4",
         "C shapes with capo 1.",
-        {"sec-0": {"text": "C shapes, capo 1", "kind": "key"}, "sec-1": {"text": "Warm and full", "kind": "dynamic"}},
+        {"sec-0": {"text": "C shapes, capo 1", "kind": "key"}, "sec-1": {"text": "Warm on the refrain", "kind": "dynamic"}},
         """{title: Lantern Waltz}
 {artist: The Porch Lights}
 {key: C}

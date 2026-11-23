@@ -175,6 +175,31 @@ assert("nudgeChordInChordPro(-1) shifts [G] back left to 'Walking'",
   nudgedLeft
 );
 
+// 7. "Chorus" is the one section word, while lyrics and titles keep their own words
+const refrainSheet = `{{title: Refrain Of Grace}}
+{{meta_note: Form: V1 • Refrain}}
+
+{{start_of_chorus: Refrain}}
+{{note: [cue] Soft on the refrain}}
+I cannot [G]refrain from singing
+{{end_of_chorus}}`;
+const refrainParsed = parse(refrainSheet);
+const refrainEditor = chorusWordingInChordPro(refrainSheet);
+assert("Refrain labels and notes display as Chorus",
+  refrainParsed.sections[0].label === "Chorus" &&
+  refrainParsed.sections[0].sidebarNote === "Soft on the chorus" &&
+  refrainParsed.meta.note === "Form: V1 • Chorus",
+  JSON.stringify(refrainParsed.sections[0])
+);
+assert("Lyrics and titles keep the word refrain",
+  refrainParsed.meta.title === "Refrain Of Grace" &&
+  refrainParsed.sections[0].lines.some((l) => (l.segments || []).some((s) => s.lyric.includes("refrain"))) &&
+  refrainEditor.includes("{{title: Refrain Of Grace}}") &&
+  refrainEditor.includes("I cannot [G]refrain from singing") &&
+  refrainEditor.includes("{{start_of_chorus: Chorus}}"),
+  refrainEditor
+);
+
 document.getElementById("out").textContent = JSON.stringify(results);
 </script>"""
 

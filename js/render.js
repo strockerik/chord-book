@@ -12,7 +12,7 @@ import {
   toNashville,
   getChordVoicing
 } from "./chords.js";
-import { parse } from "./chordpro.js";
+import { parse, chorusWording } from "./chordpro.js";
 
 /**
  * Render an SVG guitar chord diagram for `chordName`.
@@ -152,7 +152,7 @@ export function renderSectionHTML(sec, secIdx, opts = {}) {
 
   const secKey = `sec-${secIdx}`;
   const customNoteObj = sidebarNotesMap[secKey];
-  const noteText = customNoteObj?.text !== undefined ? customNoteObj.text : (sec.sidebarNote || "");
+  const noteText = chorusWording(customNoteObj?.text !== undefined ? customNoteObj.text : (sec.sidebarNote || ""));
   const noteKind = customNoteObj?.kind || sec.sidebarKind || "general";
 
   const KIND_LABELS = {
@@ -239,8 +239,13 @@ export function renderSectionHTML(sec, secIdx, opts = {}) {
 
       const nextLyric = line.segments[segIdx + 1]?.lyric || "";
       const splitsWord = /[\p{L}\p{M}'’]$/u.test(rawLyric) && /^[\p{L}\p{M}'’]/u.test(nextLyric);
+      // A sheet can also write the break itself: "crea - " + "tion".
+      const heldSyllable = /[\p{L}\p{M}'’]\s*-\s*$/u.test(rawLyric) && /^[\p{L}\p{M}'’]/u.test(nextLyric);
+      const continuesWord = splitsWord || heldSyllable;
       // "the Al" + "mighty": the unfinished word travels with the chord that completes it.
-      const unfinished = splitsWord ? rawLyric.match(/^(.*\s)(\S+)$/su) : null;
+      const unfinished = continuesWord
+        ? rawLyric.match(heldSyllable ? /^(.*\s)(\S+\s*-\s*)$/su : /^(.*\s)(\S+)$/su)
+        : null;
       const leadText = unfinished ? unfinished[1] : rawLyric;
 
       // When a chord is wider than its syllable it pushes the word apart, so mark the break: a-bide.
@@ -250,10 +255,16 @@ export function renderSectionHTML(sec, secIdx, opts = {}) {
             ? `<span class="lyric-cell has-word-break">${lyricToHtml(leadText)}<span class="syllable-dash">-</span></span>`
             : `<span class="lyric-cell">${lyricToHtml(leadText)}</span>`)
         : "";
-      pieces.push({ html: `<span class="cl-pair${chordOnlyClass}">${chordCell}${leadCell}</span>`, joinsNext: splitsWord && !unfinished });
+      // A chord held after the last word stays with that word if the line wraps.
+      const nextSeg = line.segments[segIdx + 1];
+      const nextIsHeldChord = hasAnyLyric && !!rawLyric.trim() && !!nextSeg?.chord && !(nextSeg.lyric || "").trim();
+      pieces.push({
+        html: `<span class="cl-pair${chordOnlyClass}">${chordCell}${leadCell}</span>`,
+        joinsNext: !unfinished && (continuesWord || nextIsHeldChord)
+      });
       if (unfinished) {
         pieces.push({
-          html: `<span class="cl-pair is-word-tail"><span class="chord-cell is-empty" aria-hidden="true">&nbsp;</span><span class="lyric-cell">${esc(unfinished[2])}</span></span>`,
+          html: `<span class="cl-pair is-word-tail"><span class="chord-cell is-empty" aria-hidden="true">&nbsp;</span><span class="lyric-cell">${esc(unfinished[2]).replace(/ $/g, "&nbsp;")}</span></span>`,
           joinsNext: true
         });
       }
@@ -280,7 +291,7 @@ export function renderSectionHTML(sec, secIdx, opts = {}) {
   (sec.lines || []).forEach((line, lineIdx) => {
     const lineKey = `line-${secIdx}-${lineIdx}`;
     const lnObj = sidebarNotesMap[lineKey];
-    const lText = lnObj?.text !== undefined ? lnObj.text : (line.sidebarNote || "");
+    const lText = chorusWording(lnObj?.text !== undefined ? lnObj.text : (line.sidebarNote || ""));
     const lKind = lnObj?.kind || line.sidebarKind || "general";
     if (lText) {
       lineNotesHtml.push(`

@@ -5,6 +5,8 @@
 import { esc, toast } from "./core.js";
 import { renderSongBodyHTML, renderChordDiagramSVG } from "./render.js";
 import { soundingKeyFromShapes } from "./chords.js";
+import { chorusWording } from "./chordpro.js";
+import { fitLadder, collapseRepeatedChoruses, STANDARD_SHEET_PT, MIN_SHEET_PT } from "./fit.js";
 
 /**
  * Trigger standard browser print using our Safari-safe 680x840px 1-Page print engine,
@@ -47,7 +49,7 @@ export function downloadSelfContainedSongHTML(songRow, viewOpts = {}) {
   const soundingKey = capo > 0 ? soundingKeyFromShapes(targetKey, capo) : targetKey;
   const title = songRow.title || parsed.meta.title || "Chord Sheet";
   const artist = songRow.artist || parsed.meta.artist || "";
-  const headerNote = songRow.notes || parsed.meta.note || "";
+  const headerNote = chorusWording(songRow.notes || parsed.meta.note || "");
 
   const diagramsHtml = distinctChords.length
     ? `<div class="diagrams">${distinctChords.map((c) => renderChordDiagramSVG(c, { customDefines: parsed.meta.defines })).join("")}</div>`
@@ -60,7 +62,7 @@ export function downloadSelfContainedSongHTML(songRow, viewOpts = {}) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${esc(title)}${artist ? " — " + esc(artist) : ""} (Chord Sheet)</title>
 <style>
-  @page { size: letter portrait; margin: 0.45in; }
+  @page { size: letter portrait; margin: 0.3in; }
   * { box-sizing: border-box; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Public Sans", "Segoe UI", Roboto, sans-serif;
@@ -73,7 +75,7 @@ export function downloadSelfContainedSongHTML(songRow, viewOpts = {}) {
     max-width: 8.5in;
     margin: 0 auto;
     background: #fff;
-    padding: 0.45in;
+    padding: 0.3in;
     border: 1px solid #e5e0d8;
     border-radius: 8px;
   }
@@ -113,6 +115,7 @@ export function downloadSelfContainedSongHTML(songRow, viewOpts = {}) {
     text-align: center;
   }
   .chord-card-name { font-family: monospace; font-weight: 700; font-size: 9pt; }
+  main { font-size: ${STANDARD_SHEET_PT}pt; }
   .song-section {
     display: grid;
     grid-template-columns: 1fr 190px;
@@ -225,7 +228,7 @@ export function downloadSelfContainedSongHTML(songRow, viewOpts = {}) {
         ${headerNote ? `<p class="note">${esc(headerNote)}</p>` : ""}
       </div>
       <div class="meta">
-        <div class="pill">Shapes: <strong>${esc(targetKey)}</strong></div>
+        <div class="pill">Key: <strong>${esc(targetKey)}</strong></div>
         ${capo > 0 ? `<div class="pill">Capo: <strong>Fret ${capo}</strong> (Sounds in <strong>${esc(soundingKey)}</strong>)</div>` : ""}
       </div>
     </header>
@@ -290,10 +293,9 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
     const soundingKey = capo > 0 ? soundingKeyFromShapes(targetKey, capo) : targetKey;
     const title = song.title || parsed.meta.title || "Untitled";
     const artist = song.artist || parsed.meta.artist || "";
-    const headerNote = item?.notes || song.notes || parsed.meta.note || "";
+    const headerNote = chorusWording(item?.notes || song.notes || parsed.meta.note || "");
     const tuning = song.tuning || parsed.meta.tuning || "E A D G B E";
     const tempo = song.tempo || parsed.meta.tempo || "";
-    const timeSig = song.time_signature || parsed.meta.time || "";
 
     const diagramsHtml = includeDiagrams && distinctChords.length
       ? `<div class="diagrams">${distinctChords.map((c) => renderChordDiagramSVG(c, { customDefines: parsed.meta.defines })).join("")}</div>`
@@ -351,18 +353,17 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
           <div class="sheet-top">
             <header class="sheet-header">
               <div class="title-col">
-                <div class="set-pos-eyebrow">${esc(setName)} • Song ${idx + 1} of ${itemsWithSongs.length}${buckets.length > 1 ? ` (Part ${bIdx + 1}/${buckets.length})` : ""}</div>
                 <h1>${esc(title)}</h1>
-                ${artist ? `<p class="artist">${esc(artist)}</p>` : ""}
-                ${headerNote && bIdx === 0 ? `<p class="note">${esc(headerNote)}</p>` : ""}
+                <p class="byline">${artist ? `<span class="artist">${esc(artist)}</span>` : ""}${headerNote && bIdx === 0 ? `<span class="note">${esc(headerNote)}</span>` : ""}</p>
               </div>
               <div class="meta-pills">
-                <div class="pill is-primary"><span>${capo > 0 ? "Play Shapes" : "Key"}</span><strong>${esc(targetKey)}</strong></div>
+                ${itemsWithSongs.length > 1 ? `<div class="pill"><span>Song</span><strong>${idx + 1}/${itemsWithSongs.length}</strong></div>` : ""}
+                <div class="pill page-pill" hidden><span>Page</span><strong></strong></div>
+                <div class="pill is-primary"><span>Key</span><strong>${esc(targetKey)}</strong></div>
                 ${capo > 0 ? `<div class="pill is-accent"><span>Capo</span><strong>Fret ${capo}</strong></div>` : ""}
-                <div class="pill"><span>Sing Pitch</span><strong>${esc(soundingKey)}</strong></div>
-                ${timeSig ? `<div class="pill"><span>Time</span><strong>${esc(timeSig)}</strong></div>` : ""}
+                ${capo > 0 ? `<div class="pill"><span>Sounds in</span><strong>${esc(soundingKey)}</strong></div>` : ""}
                 ${tempo ? `<div class="pill"><span>Tempo</span><strong>${esc(tempo)} BPM</strong></div>` : ""}
-                <div class="pill"><span>Tuning</span><strong>${esc(tuning)}</strong></div>
+                ${/^(standard|e\s*a\s*d\s*g\s*b\s*e)$/i.test(String(tuning).trim()) ? "" : `<div class="pill"><span>Tuning</span><strong>${esc(tuning)}</strong></div>`}
               </div>
             </header>
             ${bIdx === 0 ? diagramsHtml : ""}
@@ -370,11 +371,7 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
               ${flowInnerHtml}
             </div>
           </div>
-          <footer class="sheet-footer">
-            <span>${esc(setName)} (${esc(eventDate)}) — ${idx + 1}. ${esc(title)}</span>
-            <span>${capo > 0 ? `Play ${esc(targetKey)} shapes • Capo ${capo} (Sounds in ${esc(soundingKey)})` : `Key of ${esc(targetKey)}`} • Song ${idx + 1} of ${itemsWithSongs.length}</span>
-          </footer>
-        </article>
+          </article>
       `);
     });
   });
@@ -392,7 +389,7 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
         <td class="mono"><strong>${esc(shapesKey)}</strong>${capo > 0 ? ` (Capo ${capo})` : ""}</td>
         <td class="mono"><strong>${esc(soundingKey)}</strong></td>
         <td class="mono">${esc(song.time_signature || "4/4")}${song.tempo ? ` • ${esc(song.tempo)} BPM` : ""}</td>
-        <td>${esc(item?.notes || song.notes || "")}</td>
+        <td>${esc(chorusWording(item?.notes || song.notes || ""))}</td>
       </tr>
     `;
   }).join("");
@@ -404,7 +401,7 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${esc(setName)} — Set List Chord Packet (${itemsWithSongs.length} Songs)</title>
 <style>
-  @page { size: letter portrait; margin: 0.45in; }
+  @page { size: letter portrait; margin: 0.3in; }
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   html, body {
     font-family: -apple-system, BlinkMacSystemFont, "Public Sans", "Segoe UI", Roboto, sans-serif;
@@ -414,7 +411,7 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
     padding: 0;
   }
   .print-toolbar {
-    max-width: 720px;
+    max-width: 736px;
     margin: 16px auto;
     background: #1c1917;
     color: #faf8f5;
@@ -434,7 +431,7 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
     cursor: pointer;
   }
   .toc-card {
-    width: 680px;
+    width: 736px;
     margin: 0 auto 20px;
     background: #ffffff;
     border: 1px solid #e5e0d8;
@@ -442,7 +439,7 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
     padding: 18px 22px;
   }
   .toc-card.print-cover-page {
-    height: 820px;
+    height: 916px;
     page-break-after: always;
     break-after: page;
   }
@@ -464,23 +461,21 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
   table.toc-table td.num, table.toc-table td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   table.toc-table .sub { font-size: 7.8pt; color: #665e52; }
 
-  /* Safari & Chrome iPad/Mac Print Safe Canvas:
-     680px x 840px leaves generous wide margins on all 4 sides, even when Safari's
-     "Print headers and footers" is checked! Never spills onto an extra page. */
+  /* Letter is 816 x 1056px. This leaves slim margins plus room for Safari's print headers and footers. */
   .sheet-page {
-    --sheet-font-size: 10pt;
+    --sheet-font-size: ${STANDARD_SHEET_PT}pt;
     --sheet-line-gap: 1.14;
     --sheet-section-gap: 6px;
     --sheet-diag-scale: 0.8;
 
-    width: 680px;
-    height: 840px;
-    max-height: 840px;
+    width: 736px;
+    height: 936px;
+    max-height: 936px;
     margin: 0 auto 20px;
     background: #ffffff;
     border: 1px solid #e5e0d8;
     border-radius: 6px;
-    padding: 16px 22px 12px;
+    padding: 14px 20px 10px;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -510,13 +505,6 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
     padding-bottom: 4px;
     margin-bottom: 6px;
     flex-shrink: 0;
-  }
-  .set-pos-eyebrow {
-    font-size: 6.8pt;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: #665e52;
   }
   .sheet-header h1 { margin: 1px 0 0; font-size: 15pt; font-family: Georgia, serif; line-height: 1.1; color: #0f172a; }
   .artist { margin: 1px 0 0; color: #57534e; font-size: 8.5pt; font-weight: 600; }
@@ -559,7 +547,7 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
   .sections-flow {
     flex: 1;
     min-height: 0;
-    font-size: var(--sheet-font-size, 10pt);
+    font-size: var(--sheet-font-size, ${STANDARD_SHEET_PT}pt);
     line-height: var(--sheet-line-gap, 1.14);
     overflow: hidden;
   }
@@ -675,6 +663,7 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
   }
   .chord-cell.is-empty { visibility: hidden; }
   .lyric-cell { white-space: pre; line-height: 1.14; }
+  .sheet-page.is-wrap-lines .lyric-line { flex-wrap: wrap; }
   .lyric-cell.has-word-break { display: flex; align-self: stretch; }
   .syllable-dash { flex: 1 0 auto; text-align: center; }
   .cl-word { display: inline-flex; align-items: flex-end; white-space: nowrap; }
@@ -695,7 +684,7 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
     padding: 2px 7px;
     border-radius: 4px;
     margin-bottom: 2px;
-    font-size: 6.6pt;
+    font-size: 8pt;
     line-height: 1.18;
     display: inline-flex;
     align-items: baseline;
@@ -709,7 +698,7 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
   .margin-note-badge {
     font-family: ui-monospace, monospace;
     font-weight: 700;
-    font-size: 5.8pt;
+    font-size: 6.8pt;
     text-transform: uppercase;
     color: #665e52;
     white-space: nowrap;
@@ -718,17 +707,16 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
   .margin-note-text { margin: 0; color: #292524; display: inline; }
   .no-print { display: none !important; }
 
-  .sheet-footer {
-    display: flex;
-    justify-content: space-between;
-    border-top: 1px solid #e5e0d8;
-    padding-top: 4px;
-    margin-top: 4px;
-    font-family: ui-monospace, monospace;
-    font-size: 6.5pt;
-    color: #665e52;
-    flex-shrink: 0;
-  }
+  /* Slim header: the page belongs to the song */
+  .title-col { flex: 1; min-width: 0; }
+  .byline { margin: 1px 0 0; font-size: 8.5pt; line-height: 1.25; }
+  .byline .artist, .byline .note { display: inline; margin: 0; font-size: inherit; }
+  .byline .artist + .note::before { content: " · "; font-style: normal; }
+  .meta-pills { flex-wrap: nowrap; flex-shrink: 0; }
+  .pill { flex-direction: row; align-items: baseline; gap: 3px; padding: 1px 5px; white-space: nowrap; }
+  .pill span { font-size: 6pt; }
+  .page-pill[hidden] { display: none; }
+  .sheet-page.is-continued .note, .sheet-page.is-continued .diagrams { display: none; }
 
   @media print {
     html, body { background: #ffffff !important; padding: 0 !important; margin: 0 !important; }
@@ -737,18 +725,18 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
     .toc-card.print-cover-page {
       border: none !important;
       margin: 0 auto !important;
-      width: 680px !important;
-      height: 820px !important;
-      max-height: 820px !important;
+      width: 736px !important;
+      height: 916px !important;
+      max-height: 916px !important;
     }
     .sheet-page {
       border: none !important;
       border-radius: 0 !important;
       margin: 0 auto !important;
-      padding: 12px 18px 8px !important;
-      width: 680px !important;
-      height: 840px !important;
-      max-height: 840px !important;
+      padding: 0 !important;
+      width: 736px !important;
+      height: 936px !important;
+      max-height: 936px !important;
       overflow: hidden !important;
     }
   }
@@ -772,8 +760,8 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
         <tr>
           <th>#</th>
           <th>Song</th>
-          <th>Play Shapes</th>
-          <th>Sing Pitch</th>
+          <th>Key</th>
+          <th>Sounds in</th>
           <th>Time / Tempo</th>
           <th>Notes</th>
         </tr>
@@ -786,90 +774,141 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
 
   ${pagesHtml.join("\n")}
 
-  <script>
-  // Deterministic 1-Page Auto-Fitter: binary-searches font size and spacing for every .sheet-page
-  // so 100% of every song fits inside its single 840px Safari-safe page box with zero overflow!
-  (function fitAllPages() {
-    const pages = Array.from(document.querySelectorAll(".sheet-page"));
-    for (const page of pages) {
-      const flow = page.querySelector(".sections-flow");
-      const footer = page.querySelector(".sheet-footer");
-      if (!flow) continue;
-
-      const applyFont = (pt) => {
-        const t = Math.max(0, Math.min(1, (pt - 6.2) / (11.2 - 6.2)));
-        page.style.setProperty("--sheet-font-size", pt.toFixed(2) + "pt");
-        page.style.setProperty("--sheet-line-gap", (1.04 + t * 0.20).toFixed(2));
-        page.style.setProperty("--sheet-row-gap", Math.round(3 + Math.pow(t, 0.85) * 5) + "px");
-        page.style.setProperty("--sheet-section-gap", Math.round(7 + Math.pow(t, 0.85) * 15) + "px");
-        page.style.setProperty("--sheet-diag-scale", (0.65 + t * 0.25).toFixed(2));
-      };
-
-      const fits = (bottomBuffer = 0) => {
-        if (page.scrollHeight > page.clientHeight + 1) return false;
-        if (flow.scrollHeight > flow.clientHeight + 1) return false;
-        if (flow.scrollWidth > flow.clientWidth + 2) return false;
-        const lines = flow.querySelectorAll(".lyric-line");
-        for (const ln of lines) {
-          if (ln.scrollWidth > ln.clientWidth + 2) return false;
-          const lastPair = ln.lastElementChild;
-          if (lastPair && lastPair.getBoundingClientRect().right > ln.getBoundingClientRect().right + 2) {
-            return false;
-          }
-        }
-        if (footer) {
-          const fTop = footer.getBoundingClientRect().top;
-          const secs = flow.querySelectorAll(".song-section");
-          for (const s of secs) {
-            if (s.getBoundingClientRect().bottom > fTop + 1 - bottomBuffer) return false;
-          }
-        }
-        return true;
-      };
-
-      let low = 6.2, high = 11.2, best = low;
-      for (let i = 0; i < 8; i++) {
-        const mid = (low + high) / 2;
-        applyFont(mid);
-        if (fits()) { best = mid; low = mid; } else { high = mid; }
-      }
-      applyFont(best);
-      let guard = 0;
-      while (!fits() && best > 6.0 && guard < 10) {
-        best -= 0.25;
-        applyFont(best);
-        guard++;
-      }
-
-      // When a song has spare vertical white space on the page, expand both line-to-line row spacing
-      // and section-to-section spacing so chords, lyrics, verses, and choruses have maximum breathing room.
-      if (fits(16)) {
-        const tBase = Math.max(0, Math.min(1, (best - 6.2) / (11.2 - 6.2)));
-        const baseLineGap = 1.04 + tBase * 0.20;
-        const baseRowGap = Math.round(3 + Math.pow(tBase, 0.85) * 5);
-        const baseSecGap = Math.round(7 + Math.pow(tBase, 0.85) * 15);
-        const maxRowGap = 11;
-        const maxSecGap = 36;
-        let sLow = 0, sHigh = 1, sBest = 0;
-        for (let i = 0; i < 6; i++) {
-          const mid = (sLow + sHigh) / 2;
-          const trialRow = Math.round(baseRowGap + mid * (maxRowGap - baseRowGap));
-          const trialSec = Math.round(baseSecGap + mid * (maxSecGap - baseSecGap));
-          const trialLine = (baseLineGap + mid * 0.12).toFixed(2);
-          page.style.setProperty("--sheet-row-gap", trialRow + "px");
-          page.style.setProperty("--sheet-section-gap", trialSec + "px");
-          page.style.setProperty("--sheet-line-gap", trialLine);
-          if (fits(16)) { sBest = mid; sLow = mid; } else { sHigh = mid; }
-        }
-        page.style.setProperty("--sheet-row-gap", Math.round(baseRowGap + sBest * (maxRowGap - baseRowGap)) + "px");
-        page.style.setProperty("--sheet-section-gap", Math.round(baseSecGap + sBest * (maxSecGap - baseSecGap)) + "px");
-        page.style.setProperty("--sheet-line-gap", (baseLineGap + sBest * 0.12).toFixed(2));
-      }
-    }
-  })();
-  </script>
+  ${exportOpts.embedFit ? `<script>
+  ${fitLadder.toString()}
+  ${collapseRepeatedChoruses.toString()}
+  (${fitPrintPages.toString()})(document, fitLadder, collapseRepeatedChoruses, ${STANDARD_SHEET_PT}, ${MIN_SHEET_PT});
+  </script>` : ""}
 </body>
 </html>`;
+}
+
+/**
+ * Fits each printed page with the same rules as the on-screen sheet.
+ * Also embedded in downloaded packets, so everything it uses is passed in.
+ */
+function fitPrintPages(doc, ladder, collapse, targetPt, minPt) {
+  const songs = new Map();
+  for (const page of doc.querySelectorAll(".sheet-page")) {
+    const key = page.dataset.songIdx;
+    if (!songs.has(key)) songs.set(key, []);
+    songs.get(key).push(page);
+  }
+
+  for (const songPages of songs.values()) {
+    const sections = songPages.flatMap((page) => Array.from(page.querySelectorAll(".song-section")));
+    const minPages = songPages.length;
+    const maxPages = Math.max(minPages, Math.min(4, sections.length));
+    const weights = sections.map((section) => Math.max(2, section.querySelectorAll(".lyric-line").length) + 1);
+    const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+
+    const splitForPages = (count) => {
+      const buckets = [];
+      let start = 0;
+      let running = 0;
+      for (let page = 1; page < count; page++) {
+        const target = (totalWeight * page) / count;
+        let end = start + 1;
+        running += weights[start];
+        while (end < sections.length - (count - page) + 1 && running + weights[end] / 2 < target) {
+          running += weights[end];
+          end++;
+        }
+        buckets.push(sections.slice(start, end));
+        start = end;
+      }
+      buckets.push(sections.slice(start));
+      return buckets;
+    };
+
+    const layoutPage = (page, pageSections, cols, wrap) => {
+      const flow = page.querySelector(".sections-flow");
+      page.classList.toggle("is-two-col", cols === 2);
+      page.classList.toggle("is-wrap-lines", wrap);
+      flow.textContent = "";
+      if (cols === 1 || pageSections.length < 2) {
+        pageSections.forEach((section) => flow.appendChild(section));
+        return;
+      }
+      const grid = doc.createElement("div");
+      const left = doc.createElement("div");
+      const right = doc.createElement("div");
+      grid.className = "two-col-grid";
+      left.className = "two-col-left";
+      right.className = "two-col-right";
+      grid.append(left, right);
+      flow.appendChild(grid);
+      pageSections.forEach((section) => left.appendChild(section));
+      const heights = pageSections.map((section) => section.getBoundingClientRect().height);
+      const total = heights.reduce((sum, height) => sum + height, 0);
+      let running = 0;
+      let bestSplit = 1;
+      let bestTallest = Infinity;
+      for (let i = 0; i < pageSections.length - 1; i++) {
+        running += heights[i];
+        const tallest = Math.max(running, total - running);
+        if (tallest < bestTallest) {
+          bestTallest = tallest;
+          bestSplit = i + 1;
+        }
+      }
+      pageSections.slice(bestSplit).forEach((section) => right.appendChild(section));
+    };
+
+    const pageFits = (page) => {
+      const flow = page.querySelector(".sections-flow");
+      if (page.scrollHeight > page.clientHeight + 1) return false;
+      if (flow.scrollHeight > flow.clientHeight + 1 || flow.scrollWidth > flow.clientWidth + 2) return false;
+      for (const line of flow.querySelectorAll(".lyric-line")) {
+        if (line.scrollWidth > line.clientWidth + 2) return false;
+        const last = line.lastElementChild;
+        if (last && last.getBoundingClientRect().right > line.getBoundingClientRect().right + 2) return false;
+      }
+      return true;
+    };
+
+    const group = [...songPages];
+    let result = null;
+    for (let count = minPages; count <= maxPages; count++) {
+      while (group.length < count) {
+        const extra = group[group.length - 1].cloneNode(true);
+        extra.querySelector(".sections-flow").textContent = "";
+        group[group.length - 1].after(extra);
+        group.push(extra);
+      }
+      const buckets = splitForPages(count);
+      group.forEach((page, i) => {
+        page.classList.toggle("is-continued", i > 0);
+        const pill = page.querySelector(".page-pill");
+        if (pill) {
+          pill.hidden = group.length < 2;
+          pill.querySelector("strong").textContent = (i + 1) + "/" + group.length;
+        }
+      });
+      result = ladder({
+        targetPt,
+        minPt,
+        columnChoices: [1, 2],
+        setType: (pt, spacing) => {
+          for (const page of group) {
+            page.style.setProperty("--sheet-font-size", pt.toFixed(2) + "pt");
+            page.style.setProperty("--sheet-line-gap", String(spacing.line));
+            page.style.setProperty("--sheet-row-gap", spacing.row + "px");
+            page.style.setProperty("--sheet-section-gap", spacing.section + "px");
+          }
+        },
+        setLayout: (cols, wrap) => group.forEach((page, i) => layoutPage(page, buckets[i], cols, wrap)),
+        fits: () => group.every(pageFits),
+        collapseRepeats: () => collapse(group)
+      });
+      if (result.fits) break;
+    }
+    group.forEach((page) => {
+      page.dataset.fitPt = result.pt.toFixed(2);
+      page.dataset.fitCols = String(result.cols);
+      page.dataset.fits = String(result.fits);
+    });
+  }
 }
 
 /**
@@ -877,7 +916,7 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
  */
 export function downloadSetlistHTML(setlist, itemsWithSongs, exportOpts = {}) {
   if (!itemsWithSongs || !itemsWithSongs.length) return;
-  const html = buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts);
+  const html = buildSetlistPrintableHTML(setlist, itemsWithSongs, { ...exportOpts, embedFit: true });
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -912,6 +951,8 @@ export function printSetlistToPDF(setlist, itemsWithSongs, exportOpts = {}) {
   doc.open();
   doc.write(html);
   doc.close();
+  // The app's security policy blocks scripts inside this frame, so fit the pages from here.
+  fitPrintPages(doc, fitLadder, collapseRepeatedChoruses, STANDARD_SHEET_PT, MIN_SHEET_PT);
 
   setTimeout(() => {
     iframe.contentWindow.focus();

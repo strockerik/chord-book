@@ -200,13 +200,13 @@ export function renderSetlistsSheetHTML(allSongs = [], { onOpenSong, onRefresh }
       <div id="setlist-export-panel" class="inline-card-form setlist-export-panel" hidden>
         <div class="export-panel-head">
           <strong>Print or send this set</strong>
-          <span class="export-page-summary" id="setlist-export-page-summary">${items.length} song${items.length === 1 ? "" : "s"} · ${items.length} page${items.length === 1 ? "" : "s"}</span>
+          <span class="export-page-summary" id="setlist-export-page-summary">${items.length} song${items.length === 1 ? "" : "s"}</span>
         </div>
         <div class="export-options-grid">
           <div>
             <label class="field-label" for="export-pages-per-song">Pages per song</label>
             <select id="export-pages-per-song" class="input-select">
-              <option value="1-sheet" selected>1 page</option>
+              <option value="1-sheet" selected>1 page when it fits</option>
               <option value="2-sheet">2 pages</option>
               <option value="saved">Each song’s saved layout</option>
             </select>
@@ -328,9 +328,7 @@ export function renderSetlistsSheetHTML(allSongs = [], { onOpenSong, onRefresh }
     const summaryEl = container.querySelector("#setlist-export-page-summary");
     const pdfBtn = container.querySelector("#print-setlist-pdf-btn");
     if (!summaryEl) return;
-    const perSong = opts.pagesPerSong === "2-sheet" ? 2 : 1;
-    const totalPages = items.length * perSong + (opts.includeIndexCover ? 1 : 0);
-    summaryEl.textContent = `${items.length} song${items.length === 1 ? "" : "s"} · ${totalPages} page${totalPages === 1 ? "" : "s"}`;
+    summaryEl.textContent = `${items.length} song${items.length === 1 ? "" : "s"}${opts.includeIndexCover ? " + cover" : ""}`;
     if (pdfBtn) {
       pdfBtn.textContent = "Print / Save PDF";
     }
