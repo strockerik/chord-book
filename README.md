@@ -82,6 +82,8 @@ python3 testing-skills/behaviour_test.py
 - Sheets are read while playing and singing. They start at 11pt, never go below 10.5pt, and never grow to fill a page. A long song takes another page.
 - Every sheet uses the same format: title, artist, key, capo, a `Form:` line, and labeled sections. Repeated choruses print once.
 - Genre stays broad: Worship, Country & Folk, Rock & Alternative, and Pop & Other. It's stored in `layout_prefs.genre`, and a song without one is Worship.
+- Auto-scroll is one steady speed per song: `js/timing.js` estimates length from BPM, time signature, the `Form:` line, intros, interludes, and repeats, then Play divides the current screen distance by that length.
+- Tuning is one of Standard, Half step down, Drop D, or Other. Half step down lowers every "Sounds in" key and vocal suggestion by one semitone.
 - On the Play screen, chords ignore taps so page turns always work. A pedal press at the end of a song moves to the next one.
 
 ---

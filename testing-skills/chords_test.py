@@ -88,6 +88,12 @@ for (const ch of ["C", "G", "G/B", "Dsus4", "D", "D/E", "Em", "Am7", "Em7", "D/F
   assert("voicing exists for " + ch, v && Array.isArray(v.frets) && v.frets.length === 6, JSON.stringify(v));
 }}
 
+// 7b. Tunings: half step down lowers the sounding key, and the others keep it
+assert("half step down: G shapes sound in F#", soundingKeyWithTuning("G", 0, "Eb Ab Db Gb Bb Eb") === "F#", soundingKeyWithTuning("G", 0, "Eb Ab Db Gb Bb Eb"));
+assert("half step down + capo 1 sounds in the written key", soundingKeyWithTuning("G", 1, "Eb Ab Db Gb Bb Eb") === "G");
+assert("drop D keeps the key", soundingKeyWithTuning("D", 0, "D A D G B E") === "D" && getTuning("D A D G B E").id === "drop_d");
+assert("standard and custom tunings are recognized", getTuning("E A D G B E").id === "standard" && getTuning("DADGAD").display === "DADGAD");
+
 // 8. Key center grouping for vocal analytics
 const kcG = getKeyCenter("G");
 const kcEm = getKeyCenter("Em");

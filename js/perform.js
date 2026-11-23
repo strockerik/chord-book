@@ -7,12 +7,14 @@
 
 import { esc, toast, loadLocal, saveLocal } from "./core.js";
 import { renderSongBodyHTML } from "./render.js";
-import { soundingKeyFromShapes, transposeKey } from "./chords.js";
+import { soundingKeyWithTuning, getTuning, transposeKey } from "./chords.js";
 import { getDeviceProfile } from "./device.js";
+import { estimateSongTiming, formatMinutes } from "./timing.js";
 
 let wakeLockSentinel = null;
-let scrollInterval = null;
-let scrollSpeed = 1.2; // px per tick
+let scrollFrame = null;
+let scrollSpeed = 1; // 1 = the song's calculated pace
+let songSeconds = 240;
 let isScrolling = false;
 let currentSongList = [];
 let currentSongIndex = 0;
@@ -125,13 +127,20 @@ function renderPerformSong(viewOpts = {}) {
     alignMode: false,
     editableNotes: false
   });
-  const sounding = capo > 0 ? soundingKeyFromShapes(model.targetKey, capo) : model.targetKey;
+  const tuning = getTuning(song.tuning || model.parsed.meta.tuning);
+  const showSounding = capo > 0 || tuning.offset !== 0;
+  const sounding = showSounding ? soundingKeyWithTuning(model.targetKey, capo, tuning.value) : model.targetKey;
+  songSeconds = estimateSongTiming(song, model.parsed, model.sectionsToRender).seconds;
+  scrollSpeed = 1;
 
   if (titleEl) titleEl.textContent = song.title;
   if (metaEl) {
-    metaEl.textContent = capo > 0
-      ? `${model.targetKey} shapes · Capo ${capo} · Sounds in ${sounding}`
-      : `Key of ${model.targetKey}`;
+    metaEl.textContent = [
+      capo > 0 ? `${model.targetKey} shapes` : `Key of ${model.targetKey}`,
+      capo > 0 ? `Capo ${capo}` : "",
+      tuning.id === "standard" ? "" : tuning.display,
+      showSounding ? `Sounds in ${sounding}` : ""
+    ].filter(Boolean).join(" · ");
   }
   if (bodyEl) {
     bodyEl.innerHTML = `
@@ -141,6 +150,7 @@ function renderPerformSong(viewOpts = {}) {
     `;
     bodyEl.scrollTop = 0;
   }
+  updateScrollBtnLabel();
 
   if (nextFooterEl) {
     const nextSong = currentSongList[currentSongIndex + 1];
@@ -174,24 +184,37 @@ export function startAutoScroll() {
   isScrolling = true;
   updateScrollBtnLabel();
   const bodyEl = document.getElementById("perform-body");
-  // Track position separately: slow speeds are under a pixel per tick and would otherwise round away.
-  let position = bodyEl ? bodyEl.scrollTop : 0;
-  scrollInterval = setInterval(() => {
-    if (!bodyEl) return;
-    if (Math.abs(bodyEl.scrollTop - position) > 2) position = bodyEl.scrollTop;
-    position += scrollSpeed;
-    bodyEl.scrollTop = position;
-    if (bodyEl.scrollTop + bodyEl.clientHeight >= bodyEl.scrollHeight - 2) {
+  if (!bodyEl) return;
+  // Keep an exact position because slow speeds move less than a pixel per frame.
+  let position = bodyEl.scrollTop;
+  let lastFrame = performance.now();
+  const step = (now) => {
+    if (!isScrolling) return;
+    const elapsed = Math.min(0.12, (now - lastFrame) / 1000);
+    lastFrame = now;
+    // Measured every frame, so rotating the screen or changing text size keeps the song's timing.
+    const distance = bodyEl.scrollHeight - bodyEl.clientHeight;
+    if (distance <= 0) {
       stopAutoScroll();
+      return;
     }
-  }, 40);
+    if (Math.abs(bodyEl.scrollTop - position) > 2) position = bodyEl.scrollTop;
+    position += (distance / songSeconds) * scrollSpeed * elapsed;
+    bodyEl.scrollTop = position;
+    if (position >= distance - 1) {
+      stopAutoScroll();
+      return;
+    }
+    scrollFrame = requestAnimationFrame(step);
+  };
+  scrollFrame = requestAnimationFrame(step);
 }
 
 export function stopAutoScroll() {
   isScrolling = false;
-  if (scrollInterval) {
-    clearInterval(scrollInterval);
-    scrollInterval = null;
+  if (scrollFrame) {
+    cancelAnimationFrame(scrollFrame);
+    scrollFrame = null;
   }
   updateScrollBtnLabel();
 }
@@ -205,7 +228,9 @@ function updateScrollBtnLabel() {
   document.getElementById("perform-overlay")?.classList.toggle("is-scrolling", isScrolling);
   const speedEl = document.getElementById("perform-speed-val");
   if (speedEl) {
-    speedEl.textContent = `${scrollSpeed.toFixed(1)}×`;
+    const length = formatMinutes(songSeconds / scrollSpeed);
+    speedEl.textContent = length;
+    speedEl.setAttribute("aria-label", `Scrolls through the song in about ${length}`);
   }
 }
 
@@ -217,11 +242,11 @@ export function initPerformanceControls() {
   document.getElementById("perform-font-up")?.addEventListener("click", () => changeStageFont(2));
 
   document.getElementById("perform-speed-down")?.addEventListener("click", () => {
-    scrollSpeed = Math.max(0.4, Number((scrollSpeed - 0.3).toFixed(1)));
+    scrollSpeed = Math.max(0.5, Number((scrollSpeed - 0.1).toFixed(1)));
     updateScrollBtnLabel();
   });
   document.getElementById("perform-speed-up")?.addEventListener("click", () => {
-    scrollSpeed = Math.min(4.0, Number((scrollSpeed + 0.3).toFixed(1)));
+    scrollSpeed = Math.min(2, Number((scrollSpeed + 0.1).toFixed(1)));
     updateScrollBtnLabel();
   });
 

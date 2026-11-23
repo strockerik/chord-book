@@ -2103,6 +2103,7 @@ body.no-cloud .needs-cloud { display: none !important; }
 .perform-overlay .ghost-btn:hover { background: #44403c; }
 .perform-overlay .solid-btn:disabled, .perform-overlay .ghost-btn:disabled { opacity: 0.45; }
 .perform-speed { display: none; }
+.perform-speed-val { justify-content: center; min-width: 38px; font-family: var(--font-mono); font-size: 0.85rem; }
 .perform-overlay.is-scrolling .perform-speed { display: inline-flex; align-items: center; }
 .perform-overlay.is-scrolling .perform-size { display: none; }
 .perform-body { padding: 14px 16px 24vh; -webkit-tap-highlight-color: transparent; }
@@ -2243,6 +2244,7 @@ body.no-cloud .needs-cloud { display: none !important; }
   .library-search-sticky { min-width: 0; }
   .form-grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .form-grid-4 > :nth-child(-n + 2) { grid-column: 1 / -1; }
+  .form-grid-4 > * { min-width: 0; }
 }
 
 @media (max-width: 620px) {

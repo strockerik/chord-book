@@ -269,6 +269,27 @@ __FIXTURE_BOOT__
     doc.querySelector('[data-close-sheet="setlists-modal"]').click();
     await sleep(40);
 
+    // 5f. Tuning saves and changes the key the song sounds in
+    const tuningSel = doc.getElementById("song-tuning-select");
+    tuningSel.value = "half";
+    tuningSel.dispatchEvent(new Event("change", { bubbles: true }));
+    await sleep(480);
+    ok("Half step down saves and lowers the sounding key",
+       storedSong()?.tuning === "Eb Ab Db Gb Bb Eb" && doc.getElementById("sounding-key-readout").textContent.includes("Eb"),
+       `${storedSong()?.tuning} / ${doc.getElementById("sounding-key-readout").textContent}`);
+    tuningSel.value = "standard";
+    tuningSel.dispatchEvent(new Event("change", { bubbles: true }));
+    await sleep(480);
+
+    // 5g. Scroll length follows tempo and includes instrumental sections
+    const timing = await import("/js/timing.js");
+    const chordproModule = await import("/js/chordpro.js");
+    const timedSheet = chordproModule.parse(`{start_of_intro: Intro}\n[G] [C] [G] [D]\n{end_of_intro}\n{start_of_verse: Verse 1}\n[G]Walking down the [C]road tonight\n{end_of_verse}\n{start_of_chorus: Chorus}\n[G]Sing it [D]out again\n{end_of_chorus}`);
+    const slow = timing.estimateSongTiming({ tempo: 40, time_signature: "4/4", notes: "Form: Intro • V1 • CH • V1 • CH" }, timedSheet).seconds;
+    const fast = timing.estimateSongTiming({ tempo: 80, time_signature: "4/4", notes: "Form: Intro • V1 • CH • V1 • CH" }, timedSheet).seconds;
+    const noIntro = timing.estimateSongTiming({ tempo: 40, time_signature: "4/4", notes: "Form: V1 • CH • V1 • CH" }, timedSheet).seconds;
+    ok("Scroll length follows BPM, form, and intros", Math.abs(slow - fast * 2) < 0.01 && slow > noIntro, `slow=${slow} fast=${fast} noIntro=${noIntro}`);
+
     // 6. Verify Service Worker registration & zero CSP violations
     let swReg = null;
     for (let i = 0; i < 25 && !swReg; i++) {

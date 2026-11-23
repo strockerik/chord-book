@@ -173,6 +173,10 @@
       <label class="more-check"><span>Nashville numbers</span><input type="checkbox" id="nashville-toggle" /></label>
 
       <h4 class="more-heading">How it feels to sing</h4>
+      <div class="more-row">
+        <label class="more-label" for="song-tuning-select">Guitar tuning</label>
+        <select id="song-tuning-select" class="input-select small-select"></select>
+      </div>
       <div class="more-pair">
       <div class="more-row">
         <label class="more-label" for="vocal-comfort-select">Range</label>
@@ -362,6 +366,22 @@
             <label class="field-label" for="edit-song-capo">Capo</label>
             <input type="number" id="edit-song-capo" class="input-text" min="0" max="12" value="0" />
           </div>
+          <div>
+            <label class="field-label" for="edit-song-tempo">Tempo (BPM)</label>
+            <input type="number" id="edit-song-tempo" class="input-text" min="20" max="300" inputmode="numeric" placeholder="76" />
+          </div>
+          <div>
+            <label class="field-label" for="edit-song-time">Time</label>
+            <select id="edit-song-time" class="input-select">
+              <option value="">Not set</option>
+              <option value="4/4">4/4</option>
+              <option value="3/4">3/4</option>
+              <option value="6/8">6/8</option>
+              <option value="12/8">12/8</option>
+              <option value="3/8">3/8</option>
+              <option value="2/4">2/4</option>
+            </select>
+          </div>
         </div>
 
         <div class="form-grid-2">
@@ -440,7 +460,7 @@
         <h4>Change the key</h4>
         <p>Use <strong>− +</strong> or pick a key and capo. Your choice saves itself.</p>
         <h4>Play</h4>
-        <p>Tap <strong>▶ Play</strong> for the big dark view. Tap the right or left side to turn the page, or the middle to start and pause scrolling. A Bluetooth pedal works too, and moves to the next song at the end.</p>
+        <p>Tap <strong>▶ Play</strong> for the big dark view. Tap the right or left side to turn the page, or the middle to start and pause scrolling. Scrolling is paced to the song's tempo and length, and − + nudge it. A Bluetooth pedal works too, and moves to the next song at the end.</p>
         <h4>Everything else</h4>
         <p><strong>More</strong> has printing, editing, notes, page layout, and how a song feels to sing.</p>
       </div>
@@ -478,7 +498,7 @@
           <option value="desktop">Desktop</option>
         </select>
 
-        <p class="account-version">Chord Book <span id="app-version-pill">v0.4.8</span> · <span id="device-mode-badge">Desktop</span></p>
+        <p class="account-version">Chord Book <span id="app-version-pill">v0.4.9</span> · <span id="device-mode-badge">Desktop</span></p>
       </div>
     </div>
   </div>
@@ -496,7 +516,7 @@
         <button type="button" class="ghost-btn perform-btn perform-size" id="perform-font-down" aria-label="Smaller text">A−</button>
         <button type="button" class="ghost-btn perform-btn perform-size" id="perform-font-up" aria-label="Larger text">A+</button>
         <button type="button" class="ghost-btn perform-btn perform-speed" id="perform-speed-down" aria-label="Slower scroll">−</button>
-        <span id="perform-speed-val" class="perform-speed-val perform-speed">1.2×</span>
+        <span id="perform-speed-val" class="perform-speed-val perform-speed">0:00</span>
         <button type="button" class="ghost-btn perform-btn perform-speed" id="perform-speed-up" aria-label="Faster scroll">+</button>
         <button type="button" class="solid-btn perform-btn" id="perform-autoscroll-btn">Scroll</button>
         <button type="button" class="ghost-btn perform-btn" id="perform-close-btn">Exit</button>

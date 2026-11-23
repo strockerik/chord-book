@@ -13,7 +13,8 @@ import {
   normalizeKeyName,
   transposeKey,
   transposeChord,
-  soundingKeyFromShapes,
+  soundingKeyWithTuning,
+  getTuning,
   capoShapesKey,
   getKeyCenter,
   suggestCapoPositions,
@@ -32,8 +33,8 @@ export function getSongEffectiveKeys(song) {
 
   // Shapes key = writtenKey shifted by user's preferred_transpose
   const shapesKey = transposeKey(writtenKey, transpose);
-  // Concert sounding key = shapesKey + capo semitones
-  const soundingKey = soundingKeyFromShapes(shapesKey, capo);
+  // Concert sounding key = shapesKey + capo semitones + tuning (half step down is -1)
+  const soundingKey = soundingKeyWithTuning(shapesKey, capo, song.tuning || parsed.meta.tuning);
   const center = getKeyCenter(soundingKey);
 
   // Compute open-chord playability % in the current shapes key
@@ -258,8 +259,10 @@ export function getIdealVocalRangeRecommendations(songDraftOrRow, librarySongs =
   const currentCapo = Number(songDraftOrRow?.capo ?? parsed.meta.capo ?? 0);
 
   const currentShapesKey = transposeKey(writtenKey, currentTranspose);
-  const currentSoundingKey = currentCapo > 0
-    ? soundingKeyFromShapes(currentShapesKey, currentCapo)
+  const tuningValue = songDraftOrRow?.tuning || parsed.meta.tuning;
+  const tuningOffset = getTuning(tuningValue).offset;
+  const currentSoundingKey = currentCapo > 0 || tuningOffset
+    ? soundingKeyWithTuning(currentShapesKey, currentCapo, tuningValue)
     : currentShapesKey;
 
   const isMinorSong = writtenKey.endsWith("m");
@@ -289,12 +292,17 @@ export function getIdealVocalRangeRecommendations(songDraftOrRow, librarySongs =
     const rawFromCurrent = ((targetPitch - currentSoundingPitch) % 12 + 12) % 12;
     const shiftFromCurrent = rawFromCurrent > 6 ? rawFromCurrent - 12 : rawFromCurrent;
 
-    // Semitone shift from written key to reach targetSoundingKey with Capo 0
-    const rawFromWritten = ((targetPitch - writtenPitch) % 12 + 12) % 12;
+    // What to finger so this guitar's tuning lands on the target key
+    const frettedKey = tuningOffset ? transposeKey(targetSoundingKey, -tuningOffset) : targetSoundingKey;
+    const frettedRoot = frettedKey.endsWith("m") ? frettedKey.slice(0, -1) : frettedKey;
+    const frettedPitch = NOTE_TO_PITCH[frettedRoot] ?? targetPitch;
+
+    // Semitone shift from written key to reach the target with Capo 0
+    const rawFromWritten = ((frettedPitch - writtenPitch) % 12 + 12) % 12;
     const shiftFromWritten = rawFromWritten > 6 ? rawFromWritten - 12 : rawFromWritten;
 
     // Score pure transpose (capo 0) open-chord playability
-    const pureChords = rawChords.map((c) => transposeChord(c, shiftFromWritten, targetSoundingKey));
+    const pureChords = rawChords.map((c) => transposeChord(c, shiftFromWritten, frettedKey));
     let pureOpen = 0;
     for (const c of pureChords) {
       const p = parseChord(c);
@@ -303,7 +311,7 @@ export function getIdealVocalRangeRecommendations(songDraftOrRow, librarySongs =
     const purePlayability = pureChords.length ? Math.round((pureOpen / pureChords.length) * 100) : 100;
 
     // Also compute best easy open-chord Capo option (capo 1..6) that still sounds in targetSoundingKey
-    const capoCandidates = suggestCapoPositions(pureChords, targetSoundingKey)
+    const capoCandidates = suggestCapoPositions(pureChords, frettedKey)
       .filter((c) => c.capo >= 1 && c.capo <= 6);
     const bestCapo = capoCandidates[0] || null;
 
@@ -334,7 +342,7 @@ export function getIdealVocalRangeRecommendations(songDraftOrRow, librarySongs =
       pureOption: {
         kind: "transpose",
         targetSoundingKey,
-        targetShapesKey: targetSoundingKey,
+        targetShapesKey: frettedKey,
         capo: 0,
         semitoneShiftFromWritten: shiftFromWritten,
         semitoneShiftFromCurrent: shiftFromCurrent,

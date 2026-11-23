@@ -4,7 +4,7 @@
 
 import { esc, toast } from "./core.js";
 import { renderSongBodyHTML, renderChordDiagramSVG } from "./render.js";
-import { soundingKeyFromShapes } from "./chords.js";
+import { soundingKeyWithTuning, getTuning } from "./chords.js";
 import { chorusWording } from "./chordpro.js";
 import { fitLadder, collapseRepeatedChoruses, STANDARD_SHEET_PT, MIN_SHEET_PT } from "./fit.js";
 
@@ -46,7 +46,9 @@ export function downloadSelfContainedSongHTML(songRow, viewOpts = {}) {
   const bodyModel = renderSongBodyHTML(songRow, { ...viewOpts, editableNotes: false });
   const { parsed, targetKey, distinctChords, sectionsToRender, renderSection } = bodyModel;
   const capo = Number(viewOpts.capo ?? songRow.capo ?? parsed.meta.capo ?? 0);
-  const soundingKey = capo > 0 ? soundingKeyFromShapes(targetKey, capo) : targetKey;
+  const tuningInfo = getTuning(viewOpts.tuning || songRow.tuning || parsed.meta.tuning);
+  const showSounding = capo > 0 || tuningInfo.offset !== 0;
+  const soundingKey = showSounding ? soundingKeyWithTuning(targetKey, capo, tuningInfo.value) : targetKey;
   const title = songRow.title || parsed.meta.title || "Chord Sheet";
   const artist = songRow.artist || parsed.meta.artist || "";
   const headerNote = chorusWording(songRow.notes || parsed.meta.note || "");
@@ -229,7 +231,9 @@ export function downloadSelfContainedSongHTML(songRow, viewOpts = {}) {
       </div>
       <div class="meta">
         <div class="pill">Key: <strong>${esc(targetKey)}</strong></div>
-        ${capo > 0 ? `<div class="pill">Capo: <strong>Fret ${capo}</strong> (Sounds in <strong>${esc(soundingKey)}</strong>)</div>` : ""}
+        ${capo > 0 ? `<div class="pill">Capo: <strong>Fret ${capo}</strong></div>` : ""}
+        ${tuningInfo.id === "standard" ? "" : `<div class="pill">Tuning: <strong>${esc(tuningInfo.display)}</strong></div>`}
+        ${showSounding ? `<div class="pill">Sounds in: <strong>${esc(soundingKey)}</strong></div>` : ""}
       </div>
     </header>
     ${diagramsHtml}
@@ -290,11 +294,12 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
       editableNotes: false
     });
     const { parsed, targetKey, distinctChords, sectionsToRender, renderSection } = bodyModel;
-    const soundingKey = capo > 0 ? soundingKeyFromShapes(targetKey, capo) : targetKey;
+    const tuningInfo = getTuning(song.tuning || parsed.meta.tuning);
+    const showSounding = capo > 0 || tuningInfo.offset !== 0;
+    const soundingKey = showSounding ? soundingKeyWithTuning(targetKey, capo, tuningInfo.value) : targetKey;
     const title = song.title || parsed.meta.title || "Untitled";
     const artist = song.artist || parsed.meta.artist || "";
     const headerNote = chorusWording(item?.notes || song.notes || parsed.meta.note || "");
-    const tuning = song.tuning || parsed.meta.tuning || "E A D G B E";
     const tempo = song.tempo || parsed.meta.tempo || "";
 
     const diagramsHtml = includeDiagrams && distinctChords.length
@@ -361,9 +366,9 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
                 <div class="pill page-pill" hidden><span>Page</span><strong></strong></div>
                 <div class="pill is-primary"><span>Key</span><strong>${esc(targetKey)}</strong></div>
                 ${capo > 0 ? `<div class="pill is-accent"><span>Capo</span><strong>Fret ${capo}</strong></div>` : ""}
-                ${capo > 0 ? `<div class="pill"><span>Sounds in</span><strong>${esc(soundingKey)}</strong></div>` : ""}
+                ${tuningInfo.id === "standard" ? "" : `<div class="pill is-accent"><span>Tuning</span><strong>${esc(tuningInfo.display)}</strong></div>`}
+                ${showSounding ? `<div class="pill"><span>Sounds in</span><strong>${esc(soundingKey)}</strong></div>` : ""}
                 ${tempo ? `<div class="pill"><span>Tempo</span><strong>${esc(tempo)} BPM</strong></div>` : ""}
-                ${/^(standard|e\s*a\s*d\s*g\s*b\s*e)$/i.test(String(tuning).trim()) ? "" : `<div class="pill"><span>Tuning</span><strong>${esc(tuning)}</strong></div>`}
               </div>
             </header>
             ${bIdx === 0 ? diagramsHtml : ""}
@@ -381,7 +386,8 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
     const capo = Number(item?.capo ?? song.capo ?? 0);
     const bodyModel = renderSongBodyHTML(song, { semitoneDelta, editableNotes: false });
     const shapesKey = bodyModel.targetKey;
-    const soundingKey = capo > 0 ? soundingKeyFromShapes(shapesKey, capo) : shapesKey;
+    const tocTuning = song.tuning || bodyModel.parsed.meta.tuning;
+    const soundingKey = capo > 0 || getTuning(tocTuning).offset ? soundingKeyWithTuning(shapesKey, capo, tocTuning) : shapesKey;
     return `
       <tr>
         <td class="num">${idx + 1}</td>

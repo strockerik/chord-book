@@ -20,7 +20,9 @@ import {
   NOTE_TO_PITCH,
   normalizeKeyName,
   transposeKey,
-  soundingKeyFromShapes,
+  soundingKeyWithTuning,
+  getTuning,
+  TUNINGS,
   suggestCapoPositions
 } from "./chords.js";
 import {
@@ -55,6 +57,7 @@ let viewState = {
   leftHanded: false,
   vocalRating: null,
   vocalComfort: null,
+  tuning: "E A D G B E",
   sidebarNotes: {},
   alignMode: false,
   isDirty: false
@@ -174,6 +177,19 @@ export function initSongController({ onSaveSong, onDeleteSong, getLibrarySongs }
     refreshSongView();
   });
 
+  // Guitar tuning: half step down changes the key the song sounds in
+  const tuningSelect = document.getElementById("song-tuning-select");
+  if (tuningSelect) {
+    tuningSelect.innerHTML = TUNINGS.map((t) => `<option value="${t.id}">${esc(t.label)}</option>`).join("");
+    tuningSelect.addEventListener("change", (e) => {
+      const choice = TUNINGS.find((t) => t.id === e.target.value) || TUNINGS[0];
+      // Keep a specific custom tuning if "Other" is already selected.
+      if (choice.id !== getTuning(viewState.tuning).id) viewState.tuning = choice.value;
+      viewState.isDirty = true;
+      refreshSongView();
+    });
+  }
+
   // Vocal Comfort & Rating controls on the song bar
   document.getElementById("vocal-comfort-select")?.addEventListener("change", (e) => {
     viewState.vocalComfort = e.target.value || null;
@@ -213,6 +229,7 @@ export function initSongController({ onSaveSong, onDeleteSong, getLibrarySongs }
   // Perform Song button
   document.getElementById("perform-song-btn")?.addEventListener("click", () => {
     if (!activeSong) return;
+    flushAutosave();
     openPerformanceMode([activeSong], 0, viewState);
   });
 
@@ -472,6 +489,7 @@ export function openSongView(song, { discardPending = false } = {}) {
     displayStyle: prefs.display_style || "above",
     nashville: false,
     leftHanded: !!prefs.left_handed,
+    tuning: song.tuning || parsed.meta.tuning || "E A D G B E",
     vocalRating: song.vocal_rating ?? null,
     vocalComfort: song.vocal_comfort ?? null,
     sidebarNotes: JSON.parse(JSON.stringify(prefs.sidebar_notes || {})),
@@ -503,6 +521,7 @@ export function refreshSongView() {
     preferred_transpose: viewState.semitoneDelta,
     vocal_rating: viewState.vocalRating,
     vocal_comfort: viewState.vocalComfort,
+    tuning: viewState.tuning,
     layout_prefs: {
       ...(activeSong.layout_prefs || {}),
       page_mode: viewState.pageMode,
@@ -525,8 +544,10 @@ function refreshSongToolbar(fitInfo = null) {
   const baseKey = normalizeKeyName(activeSong.key || parsed.meta.key || parsed.meta.inferredKey || "G");
   const isMinor = baseKey.endsWith("m");
   const currentShapesKey = transposeKey(baseKey, viewState.semitoneDelta, viewState.accidentalPref);
-  const soundingKey = viewState.capo > 0
-    ? soundingKeyFromShapes(currentShapesKey, viewState.capo, viewState.accidentalPref)
+  const tuningInfo = getTuning(viewState.tuning);
+  const showSounding = viewState.capo > 0 || tuningInfo.offset !== 0;
+  const soundingKey = showSounding
+    ? soundingKeyWithTuning(currentShapesKey, viewState.capo, viewState.tuning, viewState.accidentalPref)
     : currentShapesKey;
 
   // Populate Target Key dropdown
@@ -554,7 +575,7 @@ function refreshSongToolbar(fitInfo = null) {
 
   const soundingPill = document.getElementById("sounding-key-readout");
   if (soundingPill) {
-    soundingPill.hidden = viewState.capo === 0;
+    soundingPill.hidden = !showSounding;
     soundingPill.innerHTML = `Sounds in <strong>${esc(soundingKey)}</strong>`;
   }
 
@@ -582,6 +603,9 @@ function refreshSongToolbar(fitInfo = null) {
 
   const ratingSelect = document.getElementById("vocal-rating-select");
   if (ratingSelect) ratingSelect.value = viewState.vocalRating == null ? "" : String(viewState.vocalRating);
+
+  const tuningControl = document.getElementById("song-tuning-select");
+  if (tuningControl) tuningControl.value = tuningInfo.id;
 
   const columnsRow = document.getElementById("more-columns-row");
   if (columnsRow) columnsRow.hidden = viewState.pageMode === "scroll";
@@ -612,10 +636,12 @@ function renderSmartAdvisorBanner(parsed, currentShapesKey, soundingKey) {
 
   const allSongs = getLibrarySongsCallback ? getLibrarySongsCallback() : [activeSong];
   const rec = getIdealVocalRangeRecommendations(
-    { ...activeSong, preferred_transpose: viewState.semitoneDelta, capo: viewState.capo },
+    { ...activeSong, preferred_transpose: viewState.semitoneDelta, capo: viewState.capo, tuning: viewState.tuning },
     allSongs
   );
-  const capoSuggestions = suggestCapoPositions(parsed.allChords, soundingKey);
+  // Capo ideas are about what you fret, so they ignore the guitar's tuning.
+  const frettedKey = transposeKey(currentShapesKey, viewState.capo, viewState.accidentalPref);
+  const capoSuggestions = suggestCapoPositions(parsed.allChords, frettedKey);
   const bestOpenCapo = capoSuggestions.find((c) => c.capo > 0 && c.score > 80);
 
   const tips = [];
@@ -749,6 +775,7 @@ function buildSongWithCurrentSettings() {
     preferred_transpose: viewState.semitoneDelta,
     vocal_rating: viewState.vocalRating,
     vocal_comfort: viewState.vocalComfort,
+    tuning: viewState.tuning,
     layout_prefs: nextPrefs,
     updated_at: new Date().toISOString()
   };
@@ -824,7 +851,7 @@ let editingDraft = null;
 let editorBaseline = "";
 let editorHoldsImport = false;
 
-const EDITOR_FIELD_IDS = ["edit-song-title", "edit-song-artist", "edit-song-key", "edit-song-capo", "edit-song-genre", "edit-song-tags", "edit-song-notes", "edit-song-chordpro"];
+const EDITOR_FIELD_IDS = ["edit-song-title", "edit-song-artist", "edit-song-key", "edit-song-capo", "edit-song-tempo", "edit-song-time", "edit-song-genre", "edit-song-tags", "edit-song-notes", "edit-song-chordpro"];
 
 function editorSnapshot() {
   return JSON.stringify(EDITOR_FIELD_IDS.map((id) => document.getElementById(id)?.value ?? ""));
@@ -850,6 +877,14 @@ export function openSongEditor(songDraft = {}, triggerEl = null) {
   document.getElementById("edit-song-artist").value = songDraft.artist || "";
   document.getElementById("edit-song-key").value = songDraft.key || "G";
   document.getElementById("edit-song-capo").value = String(songDraft.capo || 0);
+  const draftMeta = parse(songDraft.chordpro || "").meta;
+  document.getElementById("edit-song-tempo").value = songDraft.tempo || draftMeta.tempo || "";
+  const timeInput = document.getElementById("edit-song-time");
+  const draftTime = songDraft.time_signature || draftMeta.time || "";
+  if (draftTime && !Array.from(timeInput.options).some((o) => o.value === draftTime)) {
+    timeInput.add(new Option(draftTime, draftTime));
+  }
+  timeInput.value = draftTime;
   document.getElementById("edit-song-tags").value = (songDraft.tags || []).join(", ");
   document.getElementById("edit-song-genre").value = getSongGenre(songDraft);
   document.getElementById("edit-song-notes").value = chorusWording(songDraft.notes || "");
@@ -952,6 +987,7 @@ function renderEditorVocalRangeTip() {
     key: keyInput?.value?.trim() || "",
     capo: parseInt(capoInput?.value || "0", 10) || 0,
     preferred_transpose: 0,
+    tuning: editingDraft?.tuning,
     chordpro: chordproInput.value || ""
   };
   const rec = getIdealVocalRangeRecommendations(draft, allSongs);
@@ -1019,6 +1055,13 @@ function renderEditorVocalRangeTip() {
   }
 }
 
+// Keeps a {tempo: } or {time: } line in the sheet from disagreeing with the editor field.
+function syncDirective(chordpro, name, value) {
+  const line = new RegExp(`^[ \\t]*\\{${name}:[^}]*\\}[ \\t]*\\n?`, "im");
+  if (!line.test(chordpro)) return chordpro;
+  return chordpro.replace(line, value ? `{${name}: ${value}}\n` : "");
+}
+
 function initSongEditorEvents() {
   const genreSelect = document.getElementById("edit-song-genre");
   if (genreSelect) {
@@ -1051,7 +1094,14 @@ function initSongEditorEvents() {
         .filter(Boolean);
       const notes = document.getElementById("edit-song-notes").value.trim();
       const genre = document.getElementById("edit-song-genre").value || "worship";
-      const chordpro = document.getElementById("edit-song-chordpro").value.trim();
+      const tempoValue = parseInt(document.getElementById("edit-song-tempo").value, 10);
+      const tempo = tempoValue >= 20 && tempoValue <= 300 ? tempoValue : null;
+      const timeSignature = document.getElementById("edit-song-time").value || null;
+      const chordpro = syncDirective(
+        syncDirective(document.getElementById("edit-song-chordpro").value.trim(), "tempo", tempo),
+        "time",
+        timeSignature
+      );
 
       if (!title || !chordpro) {
         toastError("Title and ChordPro sheet are required.");
@@ -1071,6 +1121,8 @@ function initSongEditorEvents() {
         artist,
         key,
         capo,
+        tempo,
+        time_signature: timeSignature,
         preferred_transpose: base.preferred_transpose ?? 0,
         tags,
         notes,

@@ -4,7 +4,7 @@
 // fits onto the requested 1 or 2 sheets without clipping or overflow.
 
 import { esc } from "./core.js";
-import { soundingKeyFromShapes } from "./chords.js";
+import { soundingKeyWithTuning, getTuning } from "./chords.js";
 import { chorusWording } from "./chordpro.js";
 import { renderSongBodyHTML, renderChordDiagramSVG } from "./render.js";
 
@@ -32,10 +32,10 @@ export function renderAndFitSong(containerEl, songRow, viewOpts = {}) {
   const { parsed, targetKey, distinctChords, sectionsToRender, renderSection } = bodyModel;
 
   const capo = Number(viewOpts.capo ?? songRow.capo ?? parsed.meta.capo ?? 0);
-  const soundingKey = capo > 0 ? soundingKeyFromShapes(targetKey, capo) : targetKey;
+  const tuning = getTuning(songRow.tuning || parsed.meta.tuning);
+  const showSounding = capo > 0 || tuning.offset !== 0;
+  const soundingKey = showSounding ? soundingKeyWithTuning(targetKey, capo, tuning.value) : targetKey;
   const headerNote = chorusWording(songRow.notes || parsed.meta.note || "");
-  const tuning = songRow.tuning || parsed.meta.tuning || "E A D G B E";
-  const isStandardTuning = /^(standard|e\s*a\s*d\s*g\s*b\s*e)$/i.test(String(tuning).trim());
 
   const diagramsHtml = showDiagrams && distinctChords.length > 0 && viewOpts.displayStyle !== "lyrics_only"
     ? `
@@ -67,17 +67,19 @@ export function renderAndFitSong(containerEl, songRow, viewOpts = {}) {
             <span class="meta-pill-label">Capo</span>
             <strong class="meta-pill-val">Fret ${capo}</strong>
           </div>
+        ` : ""}
+        ${tuning.id === "standard" ? "" : `
+          <div class="meta-pill is-accent">
+            <span class="meta-pill-label">Tuning</span>
+            <strong class="meta-pill-val">${esc(tuning.display)}</strong>
+          </div>
+        `}
+        ${showSounding ? `
           <div class="meta-pill">
             <span class="meta-pill-label">Sounds in</span>
             <strong class="meta-pill-val">${esc(soundingKey)}</strong>
           </div>
         ` : ""}
-        ${isStandardTuning ? "" : `
-          <div class="meta-pill">
-            <span class="meta-pill-label">Tuning</span>
-            <strong class="meta-pill-val">${esc(tuning)}</strong>
-          </div>
-        `}
         ${(songRow.tempo || parsed.meta.tempo) ? `
           <div class="meta-pill">
             <span class="meta-pill-label">Tempo</span>

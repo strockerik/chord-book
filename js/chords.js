@@ -186,6 +186,30 @@ export function soundingKeyFromShapes(shapesKey, capoFret, preference = "auto") 
   return transposeKey(shapesKey, +(capoFret || 0), preference);
 }
 
+// Guitar tunings. `offset` is how far the whole guitar sounds from standard pitch.
+export const TUNINGS = [
+  { id: "standard", label: "Standard", value: "E A D G B E", offset: 0 },
+  { id: "half", label: "Half step down", value: "Eb Ab Db Gb Bb Eb", offset: -1 },
+  { id: "drop_d", label: "Drop D", value: "D A D G B E", offset: 0 },
+  { id: "other", label: "Other", value: "Other", offset: 0 }
+];
+
+export function getTuning(value) {
+  const text = String(value || "").trim();
+  const compact = text.toLowerCase().replace(/\s+/g, "");
+  let tuning = TUNINGS[3];
+  if (!compact || compact === "standard" || compact === "eadgbe") tuning = TUNINGS[0];
+  else if (compact === "ebabdbgbbbeb" || compact === "d#g#c#f#a#d#" || compact === "halfstepdown") tuning = TUNINGS[1];
+  else if (compact === "dadgbe" || compact === "dropd") tuning = TUNINGS[2];
+  // A specific custom tuning keeps its own name on the sheet.
+  const display = tuning.id === "other" && text && compact !== "other" ? text : tuning.label;
+  return { ...tuning, display };
+}
+
+export function soundingKeyWithTuning(shapesKey, capoFret, tuningValue, preference = "auto") {
+  return transposeKey(shapesKey, Number(capoFret || 0) + getTuning(tuningValue).offset, preference);
+}
+
 /**
  * Convert a chord into Nashville Number notation relative to keyStr.
  * e.g. in key of G: G -> "1", C -> "4", D/F# -> "5/7", Em7 -> "6m7", Am -> "2m"
