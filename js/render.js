@@ -122,6 +122,22 @@ export function formatDisplayChord(chordStr, { semitoneDelta = 0, targetKey = "G
 /**
  * Render one song section (left column: section header + chords-over-lyrics; right column: sidebar margin rail).
  */
+// Chords are monospace at 0.9em with 4px of padding; lyric widths are approximated by letter shape.
+function estimateChordWidthEm(chord) {
+  return chord.length * 0.54 + 0.3;
+}
+
+function estimateLyricWidthEm(text) {
+  let width = 0;
+  for (const ch of text) {
+    if (/[ijlt'’.,:;!|]/.test(ch)) width += 0.28;
+    else if (/[frI ]/.test(ch)) width += 0.36;
+    else if (/[mwMW]/.test(ch)) width += 0.86;
+    else width += 0.56;
+  }
+  return width;
+}
+
 export function renderSectionHTML(sec, secIdx, opts = {}) {
   const {
     semitoneDelta = 0,
@@ -219,8 +235,14 @@ export function renderSectionHTML(sec, secIdx, opts = {}) {
               `</span>`
             : `<button type="button" class="chord-cell" data-chord="${esc(dispChord)}">${esc(dispChord)}</button>`)
         : `<span class="chord-cell is-empty" aria-hidden="true">&nbsp;</span>`;
+      // When a chord is wider than its syllable it pushes the word apart, so mark the break: a-bide.
+      const nextLyric = line.segments[segIdx + 1]?.lyric || "";
+      const splitsWord = /[\p{L}\p{M}'’]$/u.test(rawLyric) && /^[\p{L}\p{M}'’]/u.test(nextLyric);
+      const needsDash = splitsWord && !!dispChord && estimateChordWidthEm(dispChord) > estimateLyricWidthEm(rawLyric) + 0.08;
       const lyricCell = hasAnyLyric
-        ? `<span class="lyric-cell">${lyricHtml}</span>`
+        ? (needsDash
+            ? `<span class="lyric-cell has-word-break">${lyricHtml}<span class="syllable-dash">-</span></span>`
+            : `<span class="lyric-cell">${lyricHtml}</span>`)
         : "";
       return `<span class="cl-pair${chordOnlyClass}">${chordCell}${lyricCell}</span>`;
     });

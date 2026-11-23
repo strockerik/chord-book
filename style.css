@@ -1957,6 +1957,16 @@ body[data-device="phone"] .toast-bar {
   bottom: calc(14px + env(safe-area-inset-bottom));
 }
 
+/* A syllable under a wider chord: the dash sits centered in the space that chord creates. */
+.lyric-cell.has-word-break {
+  display: flex;
+  align-self: stretch;
+}
+.syllable-dash {
+  flex: 1 0 auto;
+  text-align: center;
+}
+
 /* ============================================================================
    v0.4 Simple Layout: the song is the screen. Key, capo, play; the rest is in More.
    ============================================================================ */

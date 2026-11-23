@@ -146,6 +146,16 @@ __FIXTURE_BOOT__
              allLinesSingleRow);
         }
 
+        if (songId === "test-lantern-waltz") {
+          const brokenWord = Array.from(pg?.querySelectorAll(".lyric-cell.has-word-break") || [])
+            .find((cell) => cell.textContent === "a-");
+          const dash = brokenWord?.querySelector(".syllable-dash")?.textContent || "";
+          const wordEnd = Array.from(pg?.querySelectorAll(".lyric-cell") || []).find((cell) => cell.textContent.startsWith("way"));
+          ok("A chord that splits a word marks the syllable with a dash",
+             !!brokenWord && dash === "-" && !!wordEnd && !wordEnd.classList.contains("has-word-break"),
+             `found=${!!brokenWord} dash=${dash}`);
+        }
+
         if (songId === "test-wildflower-road") {
           const allPairs = Array.from(pg?.querySelectorAll(".cl-pair") || []);
           const dcHeavenPair = allPairs.find((p) =>

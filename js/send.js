@@ -186,6 +186,8 @@ export function downloadSelfContainedSongHTML(songRow, viewOpts = {}) {
     text-align: left;
   }
   .lyric-cell { white-space: pre; }
+  .lyric-cell.has-word-break { display: flex; align-self: stretch; }
+  .syllable-dash { flex: 1 0 auto; text-align: center; }
   .section-sidebar-rail {
     border-left: 1.5px solid #e5e0d8;
     padding-left: 10px;
@@ -671,6 +673,8 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
   }
   .chord-cell.is-empty { visibility: hidden; }
   .lyric-cell { white-space: pre; line-height: 1.14; }
+  .lyric-cell.has-word-break { display: flex; align-self: stretch; }
+  .syllable-dash { flex: 1 0 auto; text-align: center; }
 
   .section-sidebar-rail {
     border-left: 1px solid #e5e0d8;

@@ -149,7 +149,7 @@ Home with the [Dm]lantern [G]all aglow [C]
 Snow on the [C]rooftop, [F]wind at the [C]pane
 Hold me until the [Am]morning [D]comes a[G]gain
 Fiddle is [C]fading, [F]embers are [C]red
-Quiet the [Dm]lantern, [G]time for [C]bed
+Quiet the [Dm]lantern, [G]a[C]way to bed
 {end_of_verse}""",
     ),
     song(
