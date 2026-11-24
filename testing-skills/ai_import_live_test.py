@@ -57,8 +57,8 @@ CASES = [
     ("photo-jesus-i-come", "Two photos of the same sideways, two-column page", "image", ["IMG_5323.jpeg", "IMG_5323 2.jpeg"], []),
     ("shot-im-on-fire", "One screenshot of a chords-over-lyrics site", "image", ["Pasted 2026-11-24 at 3.13.51 PM.png"], []),
     ("shots-start-nowhere", "Five overlapping screenshots, one repeated", "image", "Start Nowhere/*", []),
+    # The owner's reference for this song is the screen grabs; the Chordie copy of it is wrong.
     ("shots-so-last-summer", "Five phone screenshots from a chord app", "image", "Youre So Last Summer Screen Grabs/*", []),
-    ("text-so-last-summer", "Phone copy of a Chordie page (split lines)", "text", "Youre so Last Summer Text/chords.txt", []),
     ("pdf-how-deep", "One-song PDF already in the library", "pdf", "How Deep the Fathers Love.pdf", ["How Deep The Father's Love For Us"]),
     ("pdf-elevate-hope", "Four-song set list PDF, all in the library", "pdf", "2026-1203-Elevate Hope Songs.pdf", ELEVATE),
     ("text-ug-amazing-grace", "Ultimate Guitar copy with a chord diagram and a mislabeled section", "text", "Other Sources/Amazing Grace - Ultimate Guitar copy.txt", []),
@@ -67,7 +67,6 @@ CASES = [
     ("text-davetabs-crash", "DaveTabs copy, tab only with no chords or lyrics", "text", "Other Sources/Crash Into Me - DaveTabs copy.txt", []),
     ("link-hymnal-amazing-grace", "Link: hymnal.net page with chords", "url", "https://www.hymnal.net/en/hymn/h/313", []),
     ("link-jm-split-screen", "Link: John Mayer Chords page", "url", "https://johnmayerchords.com/albums/Heavier%20Things/Split%20Screen%20Sadness/Studio", []),
-    ("link-chordie-so-last-summer", "Link: the Chordie page from the phone test", "url", "https://www.chordie.com/chord.pere/www.azchords.com/t/takingbacksunday-tabs-3947/youresolastsummer-tabs-522393.html", []),
 ]
 
 
