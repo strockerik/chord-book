@@ -305,7 +305,7 @@ def report(outcomes, run_dir):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--spend", action="store_true", help="required: this makes paid AI calls")
-    ap.add_argument("--only", default="", help="run cases whose id contains this text")
+    ap.add_argument("--only", default="", help="run cases whose id contains this text (comma-separated for several)")
     ap.add_argument("--no-save", action="store_true", help="don't save results to the test account")
     ap.add_argument("--grade-only", default="", help="re-grade a saved run folder without calling the AI")
     args = ap.parse_args()
@@ -320,7 +320,7 @@ def main():
 
     base, key, email, password = config()
     token = sign_in(base, key, email, password)
-    cases = [c for c in CASES if args.only in c[0]]
+    cases = [c for c in CASES if any(o.strip() in c[0] for o in args.only.split(","))]
     run_dir = RUNS / datetime.datetime.now().strftime("import-%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
     print(f"Running {len(cases)} case(s) → {run_dir.relative_to(ROOT)}")

@@ -24,6 +24,11 @@ const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 const MODEL_TEXT = "claude-sonnet-4-6";
 const MODEL_VISION = "claude-sonnet-4-6";
 const DAILY_IMPORT_LIMIT = 20;
+// Accounts that skip the daily limit (the owner and the test account), set as the Supabase
+// secret CB_UNLIMITED_EMAILS, comma-separated. Kept out of this public file.
+const UNLIMITED_EMAILS = new Set(
+  (Deno.env.get("CB_UNLIMITED_EMAILS") || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean)
+);
 const LIMIT_CHECK_FAILED = "Couldn’t check today’s limit — try again in a minute.";
 const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_IMAGES = 6;
@@ -845,16 +850,19 @@ Deno.serve(async (req: Request) => {
   }
 
   // 3. Check daily cap right before paid call (fail closed!)
-  const { data: capCount, error: capErr } = await supabase.rpc("increment_ai_usage", {
-    usage_kind: "cb_import",
-    daily_limit: DAILY_IMPORT_LIMIT
-  });
-  if (capErr || typeof capCount !== "number") {
-    console.error("increment_ai_usage failed:", capErr);
-    return json({ error: LIMIT_CHECK_FAILED });
-  }
-  if (capCount < 0) {
-    return json({ error: `You’ve reached today’s limit of ${DAILY_IMPORT_LIMIT} AI imports. Free paste import still works anytime.` });
+  const unlimited = UNLIMITED_EMAILS.has(String(userData.user.email || "").toLowerCase());
+  if (!unlimited) {
+    const { data: capCount, error: capErr } = await supabase.rpc("increment_ai_usage", {
+      usage_kind: "cb_import",
+      daily_limit: DAILY_IMPORT_LIMIT
+    });
+    if (capErr || typeof capCount !== "number") {
+      console.error("increment_ai_usage failed:", capErr);
+      return json({ error: LIMIT_CHECK_FAILED });
+    }
+    if (capCount < 0) {
+      return json({ error: `You’ve reached today’s limit of ${DAILY_IMPORT_LIMIT} AI imports. Free paste import still works anytime.` });
+    }
   }
 
   // 4. Call Anthropic with tool schema + Chord Net validation + 1 repair attempt
@@ -893,7 +901,10 @@ Deno.serve(async (req: Request) => {
     if (!res.ok) {
       if ([429, 529].includes(res.status)) throw new Error("BUSY");
       await logAiCall(supabase, "cb_import", model, false, ms, payload?.usage, userId);
-      throw new Error(payload?.error?.message || `Anthropic HTTP ${res.status}`);
+      const reason = String(payload?.error?.message || "").slice(0, 160);
+      console.error(`Anthropic HTTP ${res.status}:`, reason);
+      if (/credit balance/i.test(reason)) throw new Error("NO_CREDIT");
+      throw new Error(`API:${res.status} ${reason}`);
     }
     if (payload?.stop_reason === "refusal") throw new Error("REFUSED");
     if (payload?.stop_reason === "max_tokens") throw new Error("TOO_LONG");
@@ -979,6 +990,9 @@ Deno.serve(async (req: Request) => {
     if (msg === "REFUSED") return json({ error: "The AI declined to read that. Try the pasted text instead." });
     if (msg === "TOO_LONG") return json({ error: "That song was too long to read in one go. Try pasting it in two parts." });
     if (msg === "BUSY") return json({ error: "The AI is busy right now. Try again in a minute." });
-    return json({ error: "The AI couldn’t read that. Try again, or the app can format it without AI." });
+    if (msg === "NO_CREDIT") return json({ error: "The AI account is out of credit. Add credit in the Anthropic console." });
+    // The API's own reason (never secret) helps the owner see what went wrong.
+    const reason = msg.startsWith("API:") ? ` (${msg.slice(4)})` : "";
+    return json({ error: `The AI couldn’t read that${reason}. Try again, or the app can format it without AI.` });
   }
 });

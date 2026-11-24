@@ -59,6 +59,8 @@ def main():
     check("Puts chords back where the source has them before checking",
           "// ==== LAYOUT ====" in src and src.count("realignToLayout(attempt.toolInput.sections, layout, isValidChordToken)") == 2
           and "pdfLayoutLines(bytes)" in src and "snapLayoutLine(l)" in src)
+    check("Daily limit skips only accounts listed in the CB_UNLIMITED_EMAILS secret",
+          'Deno.env.get("CB_UNLIMITED_EMAILS")' in src and "if (!unlimited) {" in src and "@" not in src.split("CB_UNLIMITED_EMAILS")[1][:400])
     check("Retries once when the AI is busy", "[429, 500, 502, 503, 529].includes(res.status)" in src and '"BUSY"' in src)
     check("Accepts A2 and Asus4-style chord names", "|6\\/9|69|6|5|4|2)?" in src)
     check("Uses SSRF safety helpers (parseAllowedUrl, resolvesPublic, readCapped)",
