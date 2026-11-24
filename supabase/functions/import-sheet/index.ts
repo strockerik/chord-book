@@ -13,7 +13,8 @@
 //   { type: "url", url: "<public sheet page>", note?: "<optional steer>" }
 //
 // Response: always HTTP 200 with
-//   { result: { title, artist, key, capo, tempo, time_signature, tuning, genre, form, chordpro, notes } }
+//   { result: { title, artist, key, capo, tempo, time_signature, tuning, genre, form, chordpro, notes },
+//     results: [every song found; a set list PDF can hold several], missed: songs that couldn't be read }
 // or { error: "..." }
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
@@ -25,6 +26,7 @@ const DAILY_IMPORT_LIMIT = 20;
 const LIMIT_CHECK_FAILED = "Couldn’t check today’s limit — try again in a minute.";
 const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_IMAGES = 6;
+const MAX_SONGS_PER_IMPORT = 8;
 const MAX_NOTE_CHARS = 350;
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
@@ -264,6 +266,39 @@ async function readCapped(res: Response, maxBytes = MAX_PAGE_BYTES): Promise<str
   return new TextDecoder().decode(buf);
 }
 
+// Pulls the song text out of a chord-site page: Ultimate Guitar keeps the sheet in a JSON
+// attribute, many sites put it in <pre>, and the rest is the page text without scripts.
+function pageTextForImport(pageHtml: string): string {
+  const decode = (t: string) => t
+    .replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&");
+  const store = pageHtml.match(/class="js-store"\s+data-content="([^"]+)"/);
+  if (store) {
+    try {
+      const data = JSON.parse(decode(store[1]));
+      const page = data?.store?.page?.data;
+      const content = page?.tab_view?.wiki_tab?.content;
+      if (typeof content === "string" && content.trim()) {
+        const head = [page?.tab?.song_name, page?.tab?.artist_name].filter(Boolean).join(" by ");
+        const capo = page?.tab_view?.meta?.capo ? `\nCapo: ${page.tab_view.meta.capo}` : "";
+        return `${head}${capo}\n\n${content.replace(/\[\/?(?:ch|tab)\]/g, "")}`.slice(0, 25_000);
+      }
+    } catch { /* fall through to the page text */ }
+  }
+  const title = decode((pageHtml.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || "").trim();
+  const withoutCode = pageHtml
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ");
+  const pres = [...withoutCode.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/gi)].map((m) => m[1]);
+  const body = pres.join("\n\n").replace(/<[^>]+>/g, "").trim().length > 200 ? pres.join("\n\n") : withoutCode;
+  const text = decode(body.replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|h\d)>/gi, "\n").replace(/<[^>]+>/g, ""))
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return text ? `${title}\n\n${text}`.slice(0, 25_000) : "";
+}
+
 const SHEET_SCHEMA = {
   type: "object",
   properties: {
@@ -299,9 +334,10 @@ const SHEET_SCHEMA = {
         required: ["type", "label", "sidebar_note", "lines"]
       }
     },
-    notes: { type: ["string", "null"], description: "Anything a player needs that isn't in a section, or null" }
+    notes: { type: ["string", "null"], description: "Anything a player needs that isn't in a section, or null" },
+    other_songs: { type: "array", items: { type: "string" }, description: "Titles of the other complete songs in the input, in order. Empty when the input is one song." }
   },
-  required: ["title", "artist", "key", "capo", "tuning", "tempo", "time_signature", "genre", "form", "sections", "notes"]
+  required: ["title", "artist", "key", "capo", "tuning", "tempo", "time_signature", "genre", "form", "sections", "notes", "other_songs"]
 };
 
 const SYSTEM_PROMPT = `You turn guitar chord sheets into clean Chord Book sheets. People read them while playing guitar and singing, so every chord must sit on the right word and every line must read like the song.
@@ -313,6 +349,12 @@ READ THE MESS:
 - Drop site clutter: album names, years, "this is 100% correct", ratings, chord voicing lists like "D - x57775", fret numbers, ads, and page buttons.
 - Sites often list the artist first, then the title. Return the song title as title and the band or singer as artist.
 - Read "Key:", "Capo:", tuning notes ("half step down", "Eb tuning", "Drop D"), and tempo when given.
+- Photos may be sideways, and a page may have two columns: read column one, then column two. Screenshots may overlap or repeat: include every line once, in order.
+- Drop chord shape diagrams, finger charts, copyright and CCLI lines, "submitted by" lines, video links, and buttons like "View Lyrics".
+- Write the title in Title Case, even if the source is all capitals.
+- Artist is the performing artist. A hymn or chart with only writer credits ("Words and Music by...") uses the writers, joined with " & ".
+- Section names in the source can be wrong. Words that come back the same each time are the chorus; words that change are verses.
+- If the input holds more than one song, transcribe only the first one and list the others in other_songs.
 
 KEEP IT FAITHFUL:
 - Never change, add, or simplify chords. Never rewrite lyrics. Keep backing vocals in parentheses as their own lines.
@@ -320,6 +362,9 @@ KEEP IT FAITHFUL:
 - "G (hold)" means hold that chord: put [G] on the next word and keep "(hold)" right after it.
 - Every [ ] holds only a real chord, like [G], [G/B], [Dsus4], [F#m], [Am7]. Section names never go in brackets.
 - Place each chord before the stressed syllable it is played on. A chord in the middle of a word goes in the middle: "un[Bm]less".
+- Hymns often print chords only on verse 1. When later verses are sung to the same tune, give them the same chords on the matching syllables, so every verse can be played.
+- Bar charts like "| A | C#m7 | Bsus |" become a chord-only line: "[A]   [C#m7]   [Bsus]".
+- Guitar tab (lines like "e|--3--" or "E:--3--") goes in a section of type "tab", copied exactly with tab true, under the part name from the source. Never invent chords that the source doesn't show.
 
 ORGANIZE IT:
 - One section per part, in the order it is played, labeled Intro, Verse 1, Verse 2, Pre-Chorus, Chorus, Bridge, Outro, or Interlude. Always call the chorus "Chorus", never "Refrain".
@@ -457,14 +502,13 @@ Deno.serve(async (req: Request) => {
     } catch {
       return json({ error: "Couldn’t load that page — copy the chords and paste them instead." });
     }
-    const stripped = pageHtml
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<[^>]+>/g, "\n")
-      .slice(0, 25_000);
+    const pageText = pageTextForImport(pageHtml);
+    if (pageText.length < 200) {
+      return json({ error: "That page builds itself in the browser, so it can’t be read from a link. Copy the song and paste it instead." });
+    }
     userContent.push({
       type: "text",
-      text: (note ? `User note: ${note}\n\n` : "") + `Extract the chord sheet from this page:\n\n${stripped}`
+      text: (note ? `User note: ${note}\n\n` : "") + `Extract the chord sheet from this page (${url.hostname}):\n\n${pageText}`
     });
     model = MODEL_TEXT;
   } else {
@@ -522,15 +566,19 @@ Deno.serve(async (req: Request) => {
     return { toolInput: toolBlock?.input || null, usage: payload?.usage, ms, stopReason: payload?.stop_reason };
   }
 
-  try {
+  // One song: ask, check every chord, and repair once if the check fails.
+  // `focus` names the song to read when the input holds several.
+  // deno-lint-ignore no-explicit-any
+  async function transcribe(focus: string | null): Promise<{ sheet: any; problems: string[] }> {
+    const content = focus
+      ? [...userContent, { type: "text", text: `This input holds several songs. Transcribe only "${focus}" and leave other_songs empty.` }]
+      : userContent;
     // deno-lint-ignore no-explicit-any
-    const messages: any[] = [{ role: "user", content: userContent }];
+    const messages: any[] = [{ role: "user", content }];
     let attempt = await callClaude(messages);
     let problems = validateSheetOutput(attempt.toolInput);
-    await logAiCall(supabase, "cb_import", model, problems.length === 0, attempt.ms, attempt.usage, userId);
-
+    await logAiCall(supabase, focus ? "cb_import_more" : "cb_import", model, problems.length === 0, attempt.ms, attempt.usage, userId);
     if (problems.length > 0 && attempt.toolInput) {
-      // Repair once
       messages.push({
         role: "assistant",
         content: [{ type: "tool_use", id: "repair_1", name: "save_chord_sheet", input: attempt.toolInput }]
@@ -547,29 +595,46 @@ Deno.serve(async (req: Request) => {
       problems = validateSheetOutput(attempt.toolInput);
       await logAiCall(supabase, "cb_import_repair", model, problems.length === 0, attempt.ms, attempt.usage, userId);
     }
+    return { sheet: attempt.toolInput, problems: attempt.toolInput ? problems : ["No sheet returned"] };
+  }
 
-    if (problems.length > 0 || !attempt.toolInput) {
-      return json({ error: `Couldn’t validate the transcribed chords (${problems.join(", ")}). Try pasting the text directly.` });
-    }
-
-    const sheet = attempt.toolInput;
-    const chordpro = sheetToChordPro(sheet);
+  // deno-lint-ignore no-explicit-any
+  function resultFor(sheet: any) {
     const tempo = Number(sheet.tempo);
-    return json({
-      result: {
-        title: sheet.title,
-        artist: sheet.artist,
-        key: sheet.key,
-        capo: sheet.capo || 0,
-        tempo: tempo >= 20 && tempo <= 300 ? Math.round(tempo) : null,
-        time_signature: sheet.time_signature || "4/4",
-        tuning: TUNING_VALUES[sheet.tuning] || TUNING_VALUES.standard,
-        genre: GENRES.includes(sheet.genre) ? sheet.genre : "pop",
-        form: typeof sheet.form === "string" ? sheet.form.replace(/^form:\s*/i, "").trim() : "",
-        notes: sheet.notes,
-        chordpro
+    return {
+      title: sheet.title,
+      artist: sheet.artist,
+      key: sheet.key,
+      capo: sheet.capo || 0,
+      tempo: tempo >= 20 && tempo <= 300 ? Math.round(tempo) : null,
+      time_signature: sheet.time_signature || "4/4",
+      tuning: TUNING_VALUES[sheet.tuning] || TUNING_VALUES.standard,
+      genre: GENRES.includes(sheet.genre) ? sheet.genre : "pop",
+      form: typeof sheet.form === "string" ? sheet.form.replace(/^form:\s*/i, "").trim() : "",
+      notes: sheet.notes,
+      chordpro: sheetToChordPro(sheet)
+    };
+  }
+
+  try {
+    const first = await transcribe(null);
+    if (first.problems.length > 0) {
+      return json({ error: `Couldn’t check the chords (${first.problems.join(", ")}). Try pasting the text instead.` });
+    }
+    const results = [resultFor(first.sheet)];
+
+    // A set list PDF or several photos can hold more songs. Read them side by side so the
+    // whole import stays well inside the function's time limit.
+    const others = (Array.isArray(first.sheet.other_songs) ? first.sheet.other_songs : [])
+      .filter((t: unknown) => typeof t === "string" && t.trim())
+      .slice(0, MAX_SONGS_PER_IMPORT - 1);
+    if (others.length) {
+      const more = await Promise.allSettled(others.map((title: string) => transcribe(title.trim())));
+      for (const r of more) {
+        if (r.status === "fulfilled" && r.value.problems.length === 0) results.push(resultFor(r.value.sheet));
       }
-    });
+    }
+    return json({ result: results[0], results, missed: others.length + 1 - results.length });
   } catch (err) {
     console.error("import-sheet error:", err);
     const msg = err instanceof Error ? err.message : "";

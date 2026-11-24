@@ -18,8 +18,10 @@ import { smartImportText, parse } from "./chordpro.js";
 
 let stagedImages = []; // [{ mediaType, data, previewUrl, name }]
 let stagedPdf = null;  // { data, name, size }
+let importManyHandler = null; // saves the extra songs from a set list PDF or photos
 
-export function initImportModal({ onImportReady }) {
+export function initImportModal({ onImportReady, onImportMany }) {
+  importManyHandler = onImportMany || null;
   // Tab switching inside Import Sheet
   const tabBtns = document.querySelectorAll("[data-import-tab]");
   const panels = document.querySelectorAll("[data-import-panel]");
@@ -66,11 +68,21 @@ export function initImportModal({ onImportReady }) {
         toastError("Paste some chords and lyrics first.");
         return;
       }
+      // A pasted link: the server reads the page (chord sites can't be read from the browser).
+      const isLink = /^(https?:\/\/|www\.)\S+$/i.test(raw);
       if (!getCloud()) {
+        if (isLink) {
+          toastError("Sign in to add a song from a link, or copy the song from the page and paste it.");
+          return;
+        }
         formatFree(raw);
         return;
       }
       const note = (document.getElementById("import-ai-note")?.value || "").trim();
+      if (isLink) {
+        await runEdgeImport({ body: { type: "url", url: raw, note }, btn: formatBtn, defaultLabel: "Format song", onImportReady });
+        return;
+      }
       const ok = await runEdgeImport({
         body: { type: "text", text: raw, note },
         btn: formatBtn,
@@ -274,6 +286,14 @@ async function runEdgeImport({ body, btn, defaultLabel, onImportReady, quiet = f
     const res = data?.result;
     if (!res || !res.chordpro) return fail("The AI sent back an empty sheet");
     closeSheet("import-sheet-modal");
+    const all = (Array.isArray(data.results) && data.results.length ? data.results : [res]).filter((r) => r?.chordpro);
+    if (all.length > 1 && importManyHandler) {
+      // A set list: every song goes straight into the library.
+      await importManyHandler(all.map((r) => draftFromAi(r, body.type)));
+      const missed = Number(data.missed) || 0;
+      toast(`Added ${all.length} songs${missed ? `. ${missed} couldn’t be read` : ""}.`);
+      return true;
+    }
     onImportReady(draftFromAi(res, body.type));
     toast("Done. Check it and save.");
     return true;
@@ -308,7 +328,7 @@ function draftFromAi(res, type) {
       accidental_pref: "auto",
       genre: genres.includes(res.genre) ? res.genre : "pop"
     },
-    source: type === "pdf" ? "PDF" : type === "image" ? "Photo" : "Pasted text (AI)",
+    source: type === "pdf" ? "PDF" : type === "image" ? "Photo" : type === "url" ? "Link" : "Pasted text (AI)",
     chordpro: res.chordpro
   };
 }

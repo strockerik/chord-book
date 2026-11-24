@@ -527,6 +527,36 @@ async function bootApp() {
   initImportModal({
     onImportReady: (draft) => {
       openSongEditor(draft);
+    },
+    onImportMany: async (drafts) => {
+      const now = new Date().toISOString();
+      const added = [];
+      for (const draft of drafts) {
+        const song = {
+          id: crypto.randomUUID ? crypto.randomUUID() : "song-" + Date.now() + "-" + added.length,
+          title: draft.title,
+          artist: draft.artist || "",
+          key: draft.key || "G",
+          capo: draft.capo || 0,
+          preferred_transpose: 0,
+          tempo: draft.tempo || null,
+          time_signature: draft.time_signature || null,
+          tuning: draft.tuning || "E A D G B E",
+          tags: [],
+          source: draft.source || null,
+          notes: draft.notes || "",
+          chordpro: draft.chordpro,
+          is_favorite: false,
+          vocal_rating: null,
+          vocal_comfort: null,
+          layout_prefs: { sidebar_notes: {}, ...(draft.layout_prefs || {}) },
+          created_at: now,
+          updated_at: now
+        };
+        await saveSong(song);
+        added.push(song);
+      }
+      if (added[0]) openSongView(added[0], { discardPending: true });
     }
   });
 
