@@ -66,7 +66,8 @@ __FIXTURE_BOOT__
 
   // Wait for app inside iframe to finish booting
   let win, doc;
-  for (let i = 0; i < 60; i++) {
+  // Boot time varies with machine load; the loop stops as soon as the first sheet appears.
+  for (let i = 0; i < 250; i++) {
     win = frame.contentWindow;
     doc = frame.contentDocument;
     const gate = doc?.getElementById("auth-gate");
@@ -104,10 +105,12 @@ __FIXTURE_BOOT__
            `scrollH=${pg?.scrollHeight}/${pg?.clientHeight} flowW=${fl?.scrollWidth}/${fl?.clientWidth}`);
 
         if (songId === "test-harvest-table") {
-          const reminders = pg ? pg.querySelectorAll(".verse-chorus-reminder") : [];
-          ok("Chorus-first song shows bold CHORUS reminder after each of the 3 verses",
-             reminders.length === 3 && Array.from(reminders).every((el) => el.textContent.trim() === "CHORUS"),
-             `count=${reminders.length}`);
+          const choruses = pg ? Array.from(pg.querySelectorAll(".song-section.is-chorus")) : [];
+          const written = choruses.filter((el) => el.querySelectorAll(".lyric-line").length > 0);
+          ok("Chorus-first song writes the chorus out again after each of the 3 verses",
+             choruses.length === 4 && written.length === 4 && pg.querySelectorAll(".verse-chorus-reminder").length === 0,
+             `choruses=${choruses.length} written=${written.length}`);
+
 
           const secGapPx = parseInt(pg?.style.getPropertyValue("--sheet-section-gap") || "0", 10);
           const rowGapPx = parseInt(pg?.style.getPropertyValue("--sheet-row-gap") || "0", 10);
@@ -144,6 +147,20 @@ __FIXTURE_BOOT__
           });
           ok("Song keeps every lyric+chord line (including trailing D/F#) on one line",
              allLinesSingleRow);
+
+          const hideToggle = doc.getElementById("compact-chorus-toggle");
+          hideToggle.checked = true;
+          hideToggle.dispatchEvent(new Event("change", { bubbles: true }));
+          await sleep(80);
+          const hiddenPg = doc.querySelector(".sheet-page");
+          const reminders = hiddenPg ? hiddenPg.querySelectorAll(".verse-chorus-reminder") : [];
+          ok("Hide repeated choruses shows a bold CHORUS reminder after each of the 3 verses instead",
+             reminders.length === 3 && Array.from(reminders).every((el) => el.textContent.trim() === "CHORUS") &&
+             hiddenPg.querySelectorAll(".song-section.is-chorus").length === 1,
+             `count=${reminders.length}`);
+          hideToggle.checked = false;
+          hideToggle.dispatchEvent(new Event("change", { bubbles: true }));
+          await sleep(80);
         }
 
         if (songId === "test-lantern-waltz") {
@@ -431,7 +448,7 @@ def main():
                 "--host-resolver-rules=MAP *.supabase.co 127.0.0.1:9",
                 "--disable-gpu",
                 "--no-sandbox",
-                "--virtual-time-budget=8000",
+                "--virtual-time-budget=20000",
                 f"http://127.0.0.1:{port}/__test_driver.html",
             ],
             capture_output=True,

@@ -152,7 +152,10 @@ export function renderSectionHTML(sec, secIdx, opts = {}) {
 
   const secKey = `sec-${secIdx}`;
   const customNoteObj = sidebarNotesMap[secKey];
-  const noteText = chorusWording(customNoteObj?.text !== undefined ? customNoteObj.text : (sec.sidebarNote || ""));
+  // A chorus written out again keeps its chords and words but not its margin note.
+  const noteText = sec.isRepeatCopy
+    ? ""
+    : chorusWording(customNoteObj?.text !== undefined ? customNoteObj.text : (sec.sidebarNote || ""));
   const noteKind = customNoteObj?.kind || sec.sidebarKind || "general";
 
   const KIND_LABELS = {
@@ -313,7 +316,7 @@ export function renderSectionHTML(sec, secIdx, opts = {}) {
         <p class="margin-note-text">${esc(noteText)}</p>
       </div>
     `
-    : (editableNotes
+    : (editableNotes && !sec.isRepeatCopy
         ? `<button type="button" class="add-margin-note-btn no-print" data-edit-note="${esc(secKey)}" data-sec-label="${esc(sec.label || "Section")}" title="Add sidebar cue for ${esc(sec.label || "this section")}">+ Sidebar note</button>`
         : "");
 
@@ -325,7 +328,7 @@ export function renderSectionHTML(sec, secIdx, opts = {}) {
       <div class="section-main-col">
         <div class="section-header-row">
           <h4 class="section-label">${esc(sec.label || "Section")}</h4>
-          ${editableNotes && !noteText ? `<button type="button" class="inline-note-chip no-print" data-edit-note="${esc(secKey)}" data-sec-label="${esc(sec.label || "Section")}">+ Note</button>` : ""}
+          ${editableNotes && !noteText && !sec.isRepeatCopy ? `<button type="button" class="inline-note-chip no-print" data-edit-note="${esc(secKey)}" data-sec-label="${esc(sec.label || "Section")}">+ Note</button>` : ""}
         </div>
         <div class="section-lines">
           ${linesHtml.join("")}
@@ -352,24 +355,28 @@ export function renderSongBodyHTML(songRow, viewOpts = {}) {
   const compactChorus = viewOpts.compactChorus ?? (songRow.layout_prefs?.compact_chorus || false);
   const sidebarNotesMap = songRow.layout_prefs?.sidebar_notes || {};
 
-  // Prepare sections (with optional chorus compaction)
-  let seenChorusFingerprints = new Set();
+  // Choruses are written out every time they're sung. "Hide repeated choruses" (or the
+  // one-page fit, when space runs out) shortens a repeat to a reminder instead.
+  const seenChorusFingerprints = new Set();
   const sectionsToRender = [];
+  const shortRepeat = (sec) => ({
+    type: "chorus_repeat",
+    label: sec.label || "Chorus",
+    sidebarNote: "",
+    sidebarKind: "general",
+    lines: [{ comment: "Repeat Chorus" }]
+  });
 
   parsed.sections.forEach((sec, idx) => {
+    if (sec.type === "chorus_repeat") {
+      if (!sec.lines?.length) return;
+      sectionsToRender.push({ origIdx: idx, sec: compactChorus ? shortRepeat(sec) : sec });
+      return;
+    }
     if (compactChorus && sec.type === "chorus") {
       const fp = JSON.stringify(sec.lines);
       if (seenChorusFingerprints.has(fp)) {
-        sectionsToRender.push({
-          origIdx: idx,
-          sec: {
-            type: "chorus_repeat",
-            label: `${sec.label || "Chorus"} (Repeat)`,
-            sidebarNote: sec.sidebarNote || "Repeat chorus",
-            sidebarKind: sec.sidebarKind || "cue",
-            lines: [{ comment: "Repeat Chorus" }]
-          }
-        });
+        sectionsToRender.push({ origIdx: idx, sec: shortRepeat(sec) });
         return;
       }
       seenChorusFingerprints.add(fp);
@@ -377,8 +384,8 @@ export function renderSongBodyHTML(songRow, viewOpts = {}) {
     sectionsToRender.push({ origIdx: idx, sec });
   });
 
-  // For songs where the Chorus is only printed once (a chorus-first song, for example),
-  // automatically display a bold "CHORUS" reminder after each Verse that isn't directly followed by the printed Chorus.
+  // When a sheet prints the chorus only once, it comes back after each later verse or bridge
+  // that isn't already followed by a chorus.
   const chorusIndices = [];
   sectionsToRender.forEach((item, i) => {
     if (item.sec.type === "chorus" || item.sec.type === "chorus_repeat") {
@@ -389,15 +396,23 @@ export function renderSongBodyHTML(songRow, viewOpts = {}) {
   const chorusAfterEveryVerseNote = /chorus after (each|every) verse/i.test(
     `${songRow.notes || ""} ${parsed.meta.note || ""}`
   );
+  const printedChorusIdx = parsed.sections.findIndex((sec) => sec.type === "chorus");
   if (chorusIndices.length === 1 || chorusAfterEveryVerseNote) {
+    const expanded = [];
     sectionsToRender.forEach((item, i) => {
+      expanded.push(item);
       if (item.sec.type !== "verse" && item.sec.type !== "bridge") return;
       const nextSec = sectionsToRender[i + 1]?.sec;
       const nextIsChorus = nextSec && (nextSec.type === "chorus" || nextSec.type === "chorus_repeat");
-      if (!nextIsChorus && (i > firstChorusIdx || chorusAfterEveryVerseNote)) {
+      if (nextIsChorus || !(i > firstChorusIdx || chorusAfterEveryVerseNote)) return;
+      if (compactChorus || printedChorusIdx < 0) {
         item.showChorusReminder = true;
+      } else {
+        const chorus = parsed.sections[printedChorusIdx];
+        expanded.push({ origIdx: printedChorusIdx, sec: { ...chorus, isRepeatCopy: true } });
       }
     });
+    sectionsToRender.splice(0, sectionsToRender.length, ...expanded);
   }
 
   // Compute unique displayed chords in order

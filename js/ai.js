@@ -1,7 +1,8 @@
 // Multi-Modal Chord Importer (js/ai.js)
 // Supports:
-// 1. Paste Text (ChordPro, standard 2-line Chords-Over-Lyrics, and Ugly Single-Line Pastes) — FREE & INSTANT
-// 2. Optional 1-Click AI Syllable Alignment on Ugly Pastes (`import-sheet` type="text")
+// 1. Paste Text: the AI reads it when signed in (`import-sheet` type="text"); otherwise, or if the AI
+//    can't be reached, the free on-device formatter handles ChordPro, chords over lyrics,
+//    collapsed one-line pastes, and chord sites copied on a phone.
 // 3. Multi-Snip Screenshots (Drag & drop, File Picker, OR Direct Clipboard Paste Cmd+V!) (`import-sheet` type="image")
 // 4. Phone Camera Photo Capture (`capture="environment"`) with client-side canvas downscaling
 // 5. PDF Chord Chart Upload (`import-sheet` type="pdf")
@@ -33,51 +34,53 @@ export function initImportModal({ onImportReady }) {
     });
   });
 
-  // 1. Free Instant Paste Parser
+  // 1. Paste: signed in, the AI reads it (title, genre, sections, alignment, tempo).
+  // Signed out, or if the AI can't be reached, the free on-device formatter does it.
   const pasteArea = document.getElementById("import-paste-text");
-  const parseFreeBtn = document.getElementById("import-parse-free-btn");
-  const parseAiBtn = document.getElementById("import-parse-ai-btn");
+  const formatBtn = document.getElementById("import-parse-free-btn");
 
-  if (parseFreeBtn && pasteArea) {
-    parseFreeBtn.addEventListener("click", () => {
+  const formatFree = (raw, message) => {
+    const { chordpro, format, info } = smartImportText(raw);
+    const parsed = parse(chordpro);
+    closeSheet("import-sheet-modal");
+    onImportReady({
+      title: parsed.meta.title || "Untitled song",
+      artist: parsed.meta.artist || "",
+      key: parsed.meta.key || parsed.meta.inferredKey || "G",
+      capo: parsed.meta.capo || 0,
+      tempo: parsed.meta.tempo || null,
+      time_signature: parsed.meta.time || "",
+      tuning: parsed.meta.tuning || "E A D G B E",
+      notes: info.form || "",
+      layout_prefs: { page_mode: "1-sheet", columns: "auto", compact_chorus: false, show_diagrams: false, font_offset: 0, accidental_pref: "auto", genre: info.genre },
+      source: format === "chordpro" ? "ChordPro" : "Pasted text",
+      chordpro
+    });
+    toast(message || "Formatted. Check it and save.");
+  };
+
+  if (formatBtn && pasteArea) {
+    formatBtn.addEventListener("click", async () => {
       const raw = pasteArea.value.trim();
       if (!raw) {
         toastError("Paste some chords and lyrics first.");
         return;
       }
-      const { chordpro, format } = smartImportText(raw);
-      const parsed = parse(chordpro);
-      const formatLabel =
-        format === "ugly_paste" ? "Collapsed Single-Line Paste" :
-        format === "chords_over_lyrics" ? "Chords-Over-Lyrics Tab" : "ChordPro";
-      closeSheet("import-sheet-modal");
-      onImportReady({
-        title: parsed.meta.title || "Imported Song",
-        artist: parsed.meta.artist || "",
-        key: parsed.meta.key || parsed.meta.inferredKey || "G",
-        capo: parsed.meta.capo || 0,
-        notes: parsed.meta.note || "",
-        source: formatLabel,
-        chordpro
-      });
-      toast("Formatted. Check it and save.");
-    });
-  }
-
-  if (parseAiBtn && pasteArea) {
-    parseAiBtn.addEventListener("click", async () => {
-      const raw = pasteArea.value.trim();
-      if (!raw) {
-        toastError("Paste some chords and lyrics first.");
+      if (!getCloud()) {
+        formatFree(raw);
         return;
       }
       const note = (document.getElementById("import-ai-note")?.value || "").trim();
-      await runEdgeImport({
+      const ok = await runEdgeImport({
         body: { type: "text", text: raw, note },
-        btn: parseAiBtn,
-        defaultLabel: "Clean up with AI",
-        onImportReady
+        btn: formatBtn,
+        defaultLabel: "Format song",
+        onImportReady,
+        quiet: true
       });
+      if (ok !== true) {
+        formatFree(raw, `${ok || "AI wasn’t available"}. Formatted on this device instead. Check it and save.`);
+      }
     });
   }
 
@@ -251,53 +254,75 @@ function renderStagedPdf() {
   status.innerHTML = `Selected: <strong>${esc(stagedPdf.name)}</strong> (${stagedPdf.sizeKb} KB)`;
 }
 
-async function runEdgeImport({ body, btn, defaultLabel, onImportReady }) {
+// Returns true when the sheet opened. With `quiet`, returns the error text instead of showing it.
+async function runEdgeImport({ body, btn, defaultLabel, onImportReady, quiet = false }) {
+  const fail = (message) => {
+    if (quiet) return message;
+    toastError(message);
+    return message;
+  };
   const sb = getCloud();
-  if (!sb) {
-    toastError("Sign in first to use this.");
-    return;
-  }
+  if (!sb) return fail("Sign in first to use this");
   if (btn) {
     btn.disabled = true;
     btn.textContent = "Reading…";
   }
   try {
     const { data, error } = await sb.functions.invoke("import-sheet", { body });
-    if (error) {
-      toastError(error.message || "AI import request failed.");
-      return;
-    }
-    if (data?.error) {
-      toastError(data.error);
-      return;
-    }
+    if (error) return fail(await edgeErrorText(error));
+    if (data?.error) return fail(data.error.replace(/\.$/, ""));
     const res = data?.result;
-    if (!res || !res.chordpro) {
-      toastError("AI returned an empty sheet — try pasting the text directly.");
-      return;
-    }
+    if (!res || !res.chordpro) return fail("The AI sent back an empty sheet");
     closeSheet("import-sheet-modal");
-    onImportReady({
-      title: res.title || "Imported Song",
-      artist: res.artist || "",
-      key: res.key || "G",
-      capo: res.capo || 0,
-      tempo: res.tempo || null,
-      time_signature: res.time_signature || "4/4",
-      notes: res.notes || "",
-      source: body.type === "pdf" ? "PDF Import" : body.type === "image" ? "Photo / Snip Import" : "AI Import",
-      chordpro: res.chordpro
-    });
+    onImportReady(draftFromAi(res, body.type));
     toast("Done. Check it and save.");
+    return true;
   } catch (err) {
     console.error("Edge import failed:", err);
-    toastError("Couldn’t reach import-sheet Edge Function. Make sure it is deployed in Supabase.");
+    return fail("Couldn’t reach the AI");
   } finally {
     if (btn) {
       btn.disabled = false;
       btn.textContent = defaultLabel;
     }
   }
+}
+
+function draftFromAi(res, type) {
+  const genres = ["worship", "country", "rock", "pop"];
+  return {
+    title: res.title || "Untitled song",
+    artist: res.artist || "",
+    key: res.key || "G",
+    capo: res.capo || 0,
+    tempo: res.tempo || null,
+    time_signature: res.time_signature || "4/4",
+    tuning: res.tuning || "E A D G B E",
+    notes: res.form ? `Form: ${String(res.form).replace(/^form:\s*/i, "")}` : (res.notes || ""),
+    layout_prefs: {
+      page_mode: "1-sheet",
+      columns: "auto",
+      compact_chorus: false,
+      show_diagrams: false,
+      font_offset: 0,
+      accidental_pref: "auto",
+      genre: genres.includes(res.genre) ? res.genre : "pop"
+    },
+    source: type === "pdf" ? "PDF" : type === "image" ? "Photo" : "Pasted text (AI)",
+    chordpro: res.chordpro
+  };
+}
+
+// supabase-js reports a missing or failing function as "Edge Function returned a non-2xx status code".
+async function edgeErrorText(error) {
+  const status = error?.context?.status;
+  if (status === 404) return "The AI import isn’t set up on the server yet";
+  if (status === 401 || status === 403) return "Sign in again to use the AI";
+  try {
+    const body = await error?.context?.json?.();
+    if (body?.error) return String(body.error).replace(/\.$/, "");
+  } catch { /* not JSON */ }
+  return "The AI import had a problem";
 }
 
 /**
@@ -378,7 +403,7 @@ export async function runAiChordAlignmentCheck({ title, artist, key, capo, chord
       }
     });
     if (error || data?.error) {
-      toastError(error?.message || data?.error || "AI timing check could not complete.");
+      toastError(error ? await edgeErrorText(error) : data.error);
       return;
     }
     const alignedPro = data?.result?.chordpro;
@@ -392,7 +417,7 @@ export async function runAiChordAlignmentCheck({ title, artist, key, capo, chord
     toast("✨ AI verified & aligned chord timing across all syllables!");
   } catch (err) {
     console.error("AI alignment check error:", err);
-    toastError("Couldn’t reach AI Timing Check service — use the instant Auto-Fix or ◀/▶ sheet nudger instead.");
+    toastError("Couldn’t reach the AI. Use Fix or the ◀ ▶ nudges instead.");
   } finally {
     if (btn) {
       btn.disabled = false;

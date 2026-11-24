@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fixtures import UGLY_PASTE
+from fixtures import UGLY_PASTE, SPLIT_LINE_PASTE
 
 ROOT = Path(__file__).resolve().parent.parent
 CHORDS_JS = ROOT / "js" / "chords.js"
@@ -122,6 +122,34 @@ assert("ugly paste preserves 'Now all I know' and 'Am' chords properly",
   smart.chordpro.includes("[D/F#]"),
   smart.chordpro
 );
+
+// 3b. A chord site copied on a phone (chords and words on separate lines)
+const split = smartImportText({json.dumps(SPLIT_LINE_PASTE)}.trim());
+const splitParsed = parse(split.chordpro);
+assert("phone copy is detected as split lines", split.format === "split_lines", split.format);
+assert("phone copy finds title and artist, not the album or year",
+  splitParsed.meta.title === "Lantern Hill" && splitParsed.meta.artist === "The Porch Lights", JSON.stringify(splitParsed.meta));
+assert("phone copy reads the stated key", splitParsed.meta.key === "G", splitParsed.meta.key);
+assert("phone copy drops voicings and site notes",
+  !/x[0-9]{{4}}|320033|100%|Chords:|Back Roads|2019/.test(split.chordpro), split.chordpro);
+assert("phone copy builds labeled sections in order",
+  splitParsed.sections.map((s) => s.label).join("|") === "Intro (2x)|Verse 1|Chorus|Verse 2|Chorus|Bridge (2x)",
+  splitParsed.sections.map((s) => s.label).join("|"));
+assert("intro chords and its note come from the header",
+  split.chordpro.includes("[C/E]   [G]") && splitParsed.sections[0].sidebarNote === "Let it ring", split.chordpro);
+assert("words rejoin into whole lines with each chord on its word",
+  split.chordpro.includes("Down the road[C/E] [G]where the [C/E]lan[G]tern glows") &&
+  split.chordpro.includes("[Em]Porch light shining on the gravel rows"), split.chordpro);
+assert("chorus line rejoins across chord breaks",
+  split.chordpro.includes("[G]Hold on [D]to the [Em]hill") && split.chordpro.includes("(Hold on, hold on)"), split.chordpro);
+assert("a held chord lands on the next line",
+  split.chordpro.includes("[G](hold) Fireflies are getting old"), split.chordpro);
+assert("(Repeat Chorus) becomes a chorus repeat", split.chordpro.includes("{{chorus}}"), split.chordpro);
+assert("end note is kept", split.chordpro.includes("{{comment: End on G}}"), split.chordpro);
+assert("form line follows the sections",
+  split.info.form === "Form: Intro (2x) • V1 • Chorus • V2 • Chorus • Bridge (2x)", split.info.form);
+assert("non-worship words are not filed as Worship", split.info.genre !== "worship", split.info.genre);
+assert("a normal paste is not mistaken for a phone copy", smartImportText({json.dumps(CHORDS_OVER_LYRICS_SAMPLE)}).format !== "split_lines");
 
 // 4. Transpose entire ChordPro sheet and back
 const up2 = transposeChordPro(smart.chordpro, 2);

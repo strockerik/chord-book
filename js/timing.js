@@ -111,6 +111,9 @@ function barsFromSheet(parsed, rendered, meter) {
  * Estimates how long a song takes to play from its sheet.
  * `renderedSections` is the render model's list, which marks where a printed chorus repeats.
  */
+// No song on a sheet runs longer than this; a longer estimate means the sheet was misread.
+const MAX_SONG_SECONDS = 720;
+
 export function estimateSongTiming(song, parsed, renderedSections = null) {
   const meter = readMeter(song?.time_signature || parsed?.meta?.time);
   const statedBpm = Number(song?.tempo || parsed?.meta?.tempo || 0);
@@ -120,7 +123,7 @@ export function estimateSongTiming(song, parsed, renderedSections = null) {
   const statedSeconds = Number(song?.duration_sec || 0);
   const seconds = statedSeconds > 0
     ? statedSeconds
-    : Math.max(30, Math.min(1500, bars * meter.pulsesPerBar * (60 / bpm)));
+    : Math.max(30, Math.min(MAX_SONG_SECONDS, bars * meter.pulsesPerBar * (60 / bpm)));
   return { seconds, bars, bpm, bpmIsTypical: statedBpm < 20 || statedBpm > 300 };
 }
 

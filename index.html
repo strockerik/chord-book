@@ -169,7 +169,7 @@
         </select>
       </div>
       <label class="more-check"><span>Chord diagrams</span><input type="checkbox" id="show-diagrams-toggle" /></label>
-      <label class="more-check"><span>Shorten repeated choruses</span><input type="checkbox" id="compact-chorus-toggle" /></label>
+      <label class="more-check"><span>Hide repeated choruses</span><input type="checkbox" id="compact-chorus-toggle" /></label>
       <label class="more-check"><span>Nashville numbers</span><input type="checkbox" id="nashville-toggle" /></label>
 
       <h4 class="more-heading">How it feels to sing</h4>
@@ -221,14 +221,13 @@
       </div>
 
       <div class="import-panel" data-import-panel="paste">
-        <p class="panel-helper-text">Paste chords and lyrics from anywhere. Messy is fine.</p>
+        <p class="panel-helper-text">Paste chords and lyrics from anywhere. Messy is fine. The app finds the title, sections, chords, and tempo.</p>
         <textarea id="import-paste-text" class="input-textarea mono-textarea" rows="9" placeholder="Paste your song here…"></textarea>
         <div class="form-row needs-cloud">
           <input type="text" id="import-ai-note" class="input-text" placeholder="Note for AI (optional)" aria-label="Note for AI" />
         </div>
         <div class="sheet-panel-actions">
           <button type="button" class="solid-btn" id="import-parse-free-btn">Format song</button>
-          <button type="button" class="ghost-btn needs-cloud" id="import-parse-ai-btn">Clean up with AI</button>
           <button type="button" class="link-btn" id="new-blank-song-btn">Start from blank</button>
         </div>
       </div>

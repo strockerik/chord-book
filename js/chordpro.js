@@ -1009,6 +1009,381 @@ function distributeChordsAcrossWords(chords, words) {
   return segments;
 }
 
+// ============================================================================
+// Split-line pastes (a chord site copied on a phone)
+// ============================================================================
+// Chordie, AZChords and similar sites stack each chord over its word in a little box.
+// Copying the page on a phone turns every box into separate lines:
+//   " to your head" / "Bm" / "Boys" / " like you are..."
+// A line with a leading space carries on the text before it. A bare word sits under the
+// chord before it. A blank line ends a lyric line, or, right after a chord, leaves the chord
+// standing on its own. This puts the original lines back together.
+
+const SECTION_WORDS = "intro|verse|chorus|refrain|pre-?chorus|bridge|outro|ending|interlude|instrumental|solo|tag|hook|coda|turnaround";
+const HEADER_WITH_NOTE_RE = new RegExp(`^[\\[(]?(${SECTION_WORDS})(?:\\s*(\\d+))?[\\])]?\\s*(?:[:\\-–]\\s*(.*))?$`, "i");
+
+function normalizePasteLines(text) {
+  return String(text || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[   \t]/g, " ")
+    .replace(/[​﻿]/g, "")
+    .split("\n");
+}
+
+// "A/C#-D---", "G", "G (hold)" -> { chords: ["A/C#", "D"], note: "(hold)" }
+function readChordRun(text) {
+  let body = String(text || "").trim();
+  let note = "";
+  const noteMatch = body.match(/^(.*?\S)\s*(\([^)]*\))$/);
+  if (noteMatch) {
+    body = noteMatch[1];
+    note = noteMatch[2];
+  }
+  const tokens = body.replace(/[-–—|]+/g, " ").split(/\s+/).filter(Boolean);
+  if (!tokens.length || !tokens.every((tok) => isChord(tok))) return null;
+  return { chords: tokens, note };
+}
+
+export function parseSectionHeaderWithNote(line) {
+  const trimmed = String(line || "").trim();
+  const m = trimmed.match(HEADER_WITH_NOTE_RE);
+  if (!m) return null;
+  const base = parseStandaloneSectionHeader(`${m[1]}${m[2] ? " " + m[2] : ""}:`);
+  if (!base) return null;
+  return { ...base, rest: (m[3] || "").trim() };
+}
+
+// "(Repeat Chorus)", "(Repeat)", "(Repeat x4)", "(Repeat twice)", "x2"
+function readRepeatMarker(text) {
+  const t = String(text || "").trim();
+  const bare = t.match(/^\(?\s*(?:x\s*(\d+)|(\d+)\s*x)\s*\)?$/i);
+  if (bare) return { count: Number(bare[1] || bare[2]) };
+  const m = t.match(/^\(?\s*repeat\b\s*(.*?)\s*\)?$/i);
+  if (!m) return null;
+  const rest = m[1].toLowerCase();
+  if (/chorus|refrain/.test(rest)) return { chorus: true };
+  const n = rest.match(/(\d+)/);
+  if (n) return { count: Math.max(2, Number(n[1])) };
+  if (/three|thrice/.test(rest)) return { count: 3 };
+  if (/four/.test(rest)) return { count: 4 };
+  if (!rest || /twice|two|again|once more/.test(rest)) return { count: 2 };
+  return null;
+}
+
+function tuningFromText(text) {
+  const t = String(text || "");
+  if (/half[\s-]*step|1\/2\s*step|\beb\b|e\s*flat|down\s*1\/2/i.test(t)) return "Eb Ab Db Gb Bb Eb";
+  if (/drop\s*d/i.test(t)) return "D A D G B E";
+  const notes = t.match(/\b([A-G][#b]?)\s+([A-G][#b]?)\s+([A-G][#b]?)\s+([A-G][#b]?)\s+([A-G][#b]?)\s+([A-G][#b]?)\b/i);
+  if (notes) return notes.slice(1, 7).join(" ");
+  return "";
+}
+
+function isPreambleJunk(t) {
+  return (
+    /^chords?\s*(used)?\s*:?$/i.test(t) ||
+    /\b[x\d]{6}\b/i.test(t) ||                  // chord voicings like x57775
+    /^[[(]?[-x\d\s]*[\])]?$/i.test(t) ||        // "[-]", "[244222]", "2002"
+    !!readChordRun(t) ||                        // a chord name from a voicing list
+    /\b(100%|correct|accurate|tabbed|transcribed|submitted|difficulty|rating|views|tab by|chords by|ver(?:sion)?\s*\d|autoscroll|transpose|print|font|ukulele|download)\b/i.test(t) ||
+    /^(https?:|www\.)/i.test(t) ||
+    t.length > 80
+  );
+}
+
+// Reads the lines above the first section: title, artist, key, capo, tuning, tempo.
+function readPreamble(lines) {
+  const meta = { title: "", artist: "", key: "", capo: 0, tuning: "", tempo: null };
+  const kept = [];
+  let sawAlbumDetails = false;
+  for (const raw of lines) {
+    const t = raw.trim().replace(/\s+/g, " ");
+    if (!t) continue;
+    let m;
+    if ((m = t.match(/^key(?:\s+of)?\s*[:\-]?\s*([A-Ga-g][#b]?m?)\b/i))) {
+      meta.key = m[1][0].toUpperCase() + m[1].slice(1);
+      continue;
+    }
+    if (/\bcapo\b/i.test(t)) {
+      const c = t.match(/capo\s*[:\-]?\s*(?:on\s*)?(\d{1,2})/i);
+      if (c) meta.capo = Number(c[1]);
+      continue;
+    }
+    if (/tuning|half[\s-]*step|drop\s*d/i.test(t)) {
+      meta.tuning = tuningFromText(t) || meta.tuning;
+      continue;
+    }
+    if ((m = t.match(/(\d{2,3})\s*bpm\b|tempo\s*[:\-]?\s*(\d{2,3})/i))) {
+      meta.tempo = Number(m[1] || m[2]);
+      continue;
+    }
+    if (/^(?:19|20)\d{2}$/.test(t)) {
+      sawAlbumDetails = true;
+      continue;
+    }
+    if (isPreambleJunk(t)) continue;
+    kept.push(t);
+  }
+  const clean = (s) => String(s || "").replace(/\s+(?:chords?|tabs?|lyrics)$/i, "").trim();
+  const by = kept[0]?.match(/^(.+?)\s+(?:chords?\s+|tabs?\s+)?by\s+(.+)$/i);
+  if (by) {
+    meta.title = clean(by[1]);
+    meta.artist = clean(by[2]);
+  } else if (kept[0] && /\s[-–—]\s/.test(kept[0])) {
+    const [a, ...b] = kept[0].split(/\s+[-–—]\s+/);
+    meta.title = clean(a);
+    meta.artist = clean(b.join(" - "));
+  } else if (kept.length >= 2 && (kept.length >= 3 || sawAlbumDetails)) {
+    // Song sites list Artist, Title, Album, Year.
+    meta.artist = clean(kept[0]);
+    meta.title = clean(kept[1]);
+  } else if (kept.length >= 2) {
+    meta.title = clean(kept[0]);
+    meta.artist = clean(kept[1]);
+  } else {
+    meta.title = clean(kept[0]);
+  }
+  return meta;
+}
+
+// Tidies one rebuilt line: single spaces, and a chord sits on its word, not on the space before it.
+function tidySplitLine(segments) {
+  const segs = segments.map((s) => ({ chord: s.chord || "", lyric: String(s.lyric || "").replace(/\s+/g, " ") }));
+  for (let i = 0; i < segs.length; i++) {
+    const seg = segs[i];
+    if (!seg.chord || !/^\s/.test(seg.lyric) || !seg.lyric.trim()) continue;
+    seg.lyric = seg.lyric.replace(/^\s+/, "");
+    if (i > 0 && !/\s$/.test(segs[i - 1].lyric)) segs[i - 1].lyric += " ";
+  }
+  if (segs.length) {
+    segs[0].lyric = segs[0].lyric.replace(/^\s+/, "");
+    segs[segs.length - 1].lyric = segs[segs.length - 1].lyric.replace(/\s+$/, "");
+  }
+  const kept = segs.filter((s) => s.chord || s.lyric);
+  if (!kept.length) return null;
+  const hasWords = kept.some((s) => s.lyric.trim());
+  const hasChords = kept.some((s) => s.chord);
+  if (!hasWords && !hasChords) return null;
+  if (!hasWords) {
+    // Chord-only line: give the chords room, like "[E]   [A]   [B]".
+    kept.forEach((s, i) => { s.lyric = i < kept.length - 1 ? "   " : ""; });
+  }
+  return { segments: kept };
+}
+
+/** True when the paste looks like a chord site copied on a phone (chords and words on separate lines). */
+export function looksLikeSplitLinePaste(text) {
+  const lines = normalizePasteLines(text);
+  let hits = 0;
+  for (let i = 0; i < lines.length - 1; i++) {
+    const t = lines[i].trim();
+    if (!t || /^\s/.test(lines[i]) || !readChordRun(t)) continue;
+    const next = lines[i + 1];
+    const nt = next.trim();
+    if (nt && !/^\s/.test(next) && nt.split(/\s+/).length <= 2 && !readChordRun(nt)) hits++;
+  }
+  return hits >= 4;
+}
+
+export function fromSplitLinePaste(text) {
+  const lines = normalizePasteLines(text);
+
+  // Everything above the first section header is title, artist, key and site clutter.
+  let bodyStart = lines.findIndex((l) => parseSectionHeaderWithNote(l));
+  if (bodyStart < 0) {
+    bodyStart = lines.findIndex((l, i) => {
+      const t = l.trim();
+      const next = (lines[i + 1] || "").trim();
+      return t && !/^\s/.test(l) && readChordRun(t) && next && !readChordRun(next) && !isPreambleJunk(next);
+    });
+    if (bodyStart < 0) bodyStart = 0;
+  }
+  const meta = readPreamble(lines.slice(0, bodyStart));
+
+  const sections = [];
+  let sec = null;
+  const startSection = (type, label, note = "") => {
+    sec = { type, label, sidebarNote: note, sidebarKind: note ? "cue" : "general", lines: [] };
+    sections.push(sec);
+    return sec;
+  };
+  const currentSection = () => sec || startSection("verse", "Verse");
+
+  let segs = [];
+  let pending = [];
+  let prev = "none"; // chord | word | lead | none
+  let prevLead = "";
+
+  const addText = (text) => {
+    if (pending.length) {
+      pending.slice(0, -1).forEach((c) => segs.push({ chord: c, lyric: "" }));
+      segs.push({ chord: pending[pending.length - 1], lyric: text });
+      pending = [];
+    } else if (segs.length) {
+      segs[segs.length - 1].lyric += text;
+    } else {
+      segs.push({ chord: "", lyric: text });
+    }
+  };
+  const endLine = () => {
+    if (pending.length) addText("");
+    const line = tidySplitLine(segs);
+    if (line) currentSection().lines.push(line);
+    segs = [];
+    prev = "none";
+  };
+  const nextContentLine = (from) => {
+    for (let j = from; j < lines.length; j++) if (lines[j].trim()) return lines[j];
+    return null;
+  };
+  // A new lyric line starts when the last one was a full phrase or the next begins with a capital.
+  const startsNewLine = (before, after) =>
+    before.split(/\s+/).length > 2 ||
+    /[.,!?;:"')\]”’]$/.test(before) ||
+    !(/^[a-z]/.test(after) || /^I(?:\b|['’])/.test(after));
+
+  for (let i = bodyStart; i < lines.length; i++) {
+    const raw = lines[i];
+    const t = raw.trim();
+    const lead = /^\s/.test(raw);
+
+    if (!t) {
+      if (pending.length) {
+        addText(raw.length > 0 ? " " : "");
+        prev = "word";
+      } else if (prev === "word" && raw.length > 0) {
+        addText(" ");
+      } else {
+        endLine();
+      }
+      continue;
+    }
+
+    const header = parseSectionHeaderWithNote(t);
+    if (header) {
+      endLine();
+      let rest = header.rest;
+      let count = 0;
+      rest = rest.replace(/\(\s*(?:x\s*(\d+)|(\d+)\s*x)\s*\)|\b(?:x(\d+)|(\d+)x)\b/i, (_, a, b, c, d) => {
+        count = Number(a || b || c || d);
+        return " ";
+      });
+      const tokens = rest.split(/\s+/).filter(Boolean);
+      const chords = [];
+      while (tokens.length && readChordRun(tokens[0])) chords.push(...readChordRun(tokens.shift()).chords);
+      const note = tokens.join(" ").replace(/^[,;:\-–]\s*/, "");
+      startSection(header.type, header.label + (count > 1 ? ` (${count}x)` : ""), note ? note[0].toUpperCase() + note.slice(1) : "");
+      if (chords.length) sec.lines.push(tidySplitLine(chords.map((c) => ({ chord: c, lyric: "" }))));
+      continue;
+    }
+
+    const repeat = readRepeatMarker(t);
+    if (repeat) {
+      endLine();
+      if (repeat.chorus) {
+        sections.push({ type: "chorus_repeat", label: "Chorus", sidebarNote: "", sidebarKind: "general", lines: [], isRepeatDirective: true, explicitLabel: "" });
+        sec = null;
+      } else if (sec) {
+        const upcoming = nextContentLine(i + 1);
+        const atSectionEnd = upcoming === null || !!parseSectionHeaderWithNote(upcoming) ||
+          !!readRepeatMarker(upcoming)?.chorus || /^\s*end (?:on|with)\b/i.test(upcoming);
+        const hasRepeatNote = sec.lines.some((l) => l.comment);
+        if (atSectionEnd && !hasRepeatNote && sec.lines.length <= 6 && !/\(\d+x\)/.test(sec.label)) {
+          sec.label += ` (${repeat.count}x)`;
+        } else {
+          sec.lines.push({ comment: `Repeat ${repeat.count}x` });
+        }
+      }
+      continue;
+    }
+
+    if (/^end (?:on|with)\b/i.test(t)) {
+      endLine();
+      currentSection().lines.push({ comment: t[0].toUpperCase() + t.slice(1) });
+      continue;
+    }
+
+    const run = readChordRun(t);
+    if (run && !(pending.length && t === "A")) {
+      // " G (hold)" with a leading space is a chord for the next line.
+      if (lead) endLine();
+      if (pending.length) addText("");
+      pending = run.chords.slice();
+      if (run.note) addText(`${run.note} `);
+      prev = "chord";
+      continue;
+    }
+
+    if (!lead) {
+      // A word on its own line sits under the chord before it, or finishes the text before it.
+      addText(t);
+      prev = "word";
+      continue;
+    }
+
+    if (prev === "lead" && startsNewLine(prevLead, t)) endLine();
+    addText(` ${t}${/\s$/.test(raw) ? " " : ""}`);
+    prev = "lead";
+    prevLead = t;
+  }
+  endLine();
+
+  const kept = sections.filter((s) => s.type === "chorus_repeat" || s.lines.length);
+  // A repeat marker before any chorus is printed has nothing to repeat.
+  const firstChorus = kept.findIndex((s) => s.type === "chorus");
+  const finalSections = kept.filter((s, i) => s.type !== "chorus_repeat" || (firstChorus >= 0 && i > firstChorus));
+
+  if (!meta.key) {
+    const chords = [];
+    for (const s of finalSections) for (const l of s.lines) for (const seg of l.segments || []) if (seg.chord) chords.push(seg.chord);
+    if (chords.length) meta.key = inferKeyFromChords(chords);
+  }
+  return serialize({
+    meta: { title: meta.title, artist: meta.artist, key: meta.key, capo: meta.capo, tempo: meta.tempo, tuning: meta.tuning, note: "" },
+    sections: finalSections
+  });
+}
+
+const WORSHIP_WORDS = /\b(god|lord|jesus|christ|savio(?:u)?r|holy|hallelujah|alleluia|praise|worship|grace|glory|spirit|lamb|cross|heaven|amen|hosanna|almighty|redeemer|mercy|king of kings|throne)\b/gi;
+const COUNTRY_WORDS = /\b(truck|whiskey|dirt road|tailgate|honky|y'all|cowboy|rodeo|county|hometown|porch|banjo|fiddle)\b/gi;
+
+/** Picks a broad genre from the words. Signed-in imports get a better answer from the AI. */
+export function guessGenre(chordproText) {
+  const words = parse(chordproText).sections
+    .flatMap((s) => s.lines || [])
+    .map((l) => (l.segments || []).map((seg) => seg.lyric || "").join(""))
+    .join(" ");
+  if ((words.match(WORSHIP_WORDS) || []).length >= 3) return "worship";
+  if ((words.match(COUNTRY_WORDS) || []).length >= 2) return "country";
+  return "pop";
+}
+
+/** "Form: Intro (4x) • V1 • Chorus • V2 • Chorus • Bridge (2x) • Outro" in sheet order. */
+export function buildFormLine(chordproText) {
+  const sections = parse(chordproText).sections;
+  const verses = sections.filter((s) => s.type === "verse");
+  let verseNo = 0;
+  const tokens = [];
+  for (const s of sections) {
+    const label = s.label || "";
+    const times = label.match(/\((\d+)x\)/i);
+    const suffix = times ? ` (${times[1]}x)` : "";
+    let token = "";
+    if (s.type === "verse") {
+      verseNo++;
+      const n = label.match(/verse\s*(\d+)/i);
+      token = verses.length > 1 || n ? `V${n ? n[1] : verseNo}` : "Verse";
+    } else if (s.type === "chorus" || s.type === "chorus_repeat") token = "Chorus";
+    else if (s.type === "pre_chorus") token = "Pre-Chorus";
+    else if (s.type === "intro") token = "Intro";
+    else if (s.type === "outro") token = "Outro";
+    else if (s.type === "bridge") token = /^tag/i.test(label) ? "Tag" : "Bridge";
+    else if (s.type === "instrumental") token = /turn/i.test(label) ? "Turn" : "Interlude";
+    if (token) tokens.push(token + suffix);
+  }
+  return tokens.length >= 2 ? `Form: ${tokens.join(" • ")}` : "";
+}
+
 /**
  * Smart auto-detector for any pasted text:
  * - Already ChordPro (`{title:...}` or inline `[G]lyric`) -> normalizes & returns
@@ -1017,28 +1392,38 @@ function distributeChordsAcrossWords(chords, words) {
  */
 export function smartImportText(text) {
   const raw = String(text || "").trim();
-  if (!raw) return { chordpro: "", format: "empty" };
+  if (!raw) return { chordpro: "", format: "empty", info: { form: "", genre: "worship" } };
+  const done = (chordpro, format) => ({
+    chordpro,
+    format,
+    info: { form: buildFormLine(chordpro), genre: guessGenre(chordpro) }
+  });
 
   // 1. Check if it already contains ChordPro directives or inline `[Chord]word`
   if (/^\s*\{(title|t|start_of_verse|sov|start_of_chorus|soc|key)\s*:/im.test(raw)) {
-    return { chordpro: serialize(parse(raw)), format: "chordpro" };
+    return done(serialize(parse(raw)), "chordpro");
   }
   // Inline [G]Thank you (where bracket is immediately followed by lowercase letter)
   if (/\[[A-G][#b]?[^\]]*\]\w/.test(raw) && raw.split("\n").length > 3) {
-    return { chordpro: serialize(parse(raw)), format: "chordpro" };
+    return done(serialize(parse(raw)), "chordpro");
   }
 
-  // 2. Check if it's a collapsed ugly paste (few lines, inline [Intro]/[Verse]/[Chorus], or long lines mixing chords and lyrics)
+  // 2. A chord site copied on a phone: chords and words on separate lines
+  if (looksLikeSplitLinePaste(text)) {
+    return done(fromSplitLinePaste(text), "split_lines");
+  }
+
+  // 3. Check if it's a collapsed ugly paste (few lines, inline [Intro]/[Verse]/[Chorus], or long lines mixing chords and lyrics)
   const nonEmptyLines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const hasInlineSections = /\[(Intro|Verse|Chorus|Bridge)\]\s+[A-G]/i.test(raw);
   const avgLineLen = raw.length / Math.max(1, nonEmptyLines.length);
 
   if (hasInlineSections || (nonEmptyLines.length <= 4 && avgLineLen > 120)) {
-    return { chordpro: fromUglyPaste(raw), format: "ugly_paste" };
+    return done(fromUglyPaste(raw), "ugly_paste");
   }
 
-  // 3. Standard multi-line chords over lyrics
-  return { chordpro: fromChordsOverLyrics(raw), format: "chords_over_lyrics" };
+  // 4. Standard multi-line chords over lyrics
+  return done(fromChordsOverLyrics(raw), "chords_over_lyrics");
 }
 
 // Common weak pickup words at the start of a line where an ugly paste often drops the first downbeat chord

@@ -1,8 +1,8 @@
 // Supabase Edge Function: import-sheet
 //
 // Accepts messy/ugly pasted chord text, 1-6 screenshot snips / camera photos,
-// a PDF document upload, or a public link. Uses Claude Haiku 4.5 for text/links
-// and Claude Sonnet 4.6 for images and PDFs.
+// a PDF document upload, or a public link. Uses Claude Sonnet 4.6 for everything:
+// rebuilding a messy paste into clean lines is the hard part, and imports are rare.
 // Validates output through the Chord Net (every [chord] token parses under
 // the Chord Book grammar; sections non-empty) and repairs once if needed.
 //
@@ -12,12 +12,14 @@
 //   { type: "pdf", pdfData: "<base64>", fileName?: "...", note?: "<optional steer>" }
 //   { type: "url", url: "<public sheet page>", note?: "<optional steer>" }
 //
-// Response: always HTTP 200 with { result: { title, artist, key, capo, tempo, time_signature, chordpro, notes } } or { error: "..." }
+// Response: always HTTP 200 with
+//   { result: { title, artist, key, capo, tempo, time_signature, tuning, genre, form, chordpro, notes } }
+// or { error: "..." }
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
-const MODEL_TEXT = "claude-haiku-4-5-20251001";
+const MODEL_TEXT = "claude-sonnet-4-6";
 const MODEL_VISION = "claude-sonnet-4-6";
 const DAILY_IMPORT_LIMIT = 20;
 const LIMIT_CHECK_FAILED = "Couldn’t check today’s limit — try again in a minute.";
@@ -93,6 +95,7 @@ function validateSheetOutput(sheet: {
   const badChords: string[] = [];
   for (const sec of sections) {
     const lines = Array.isArray(sec.lines) ? sec.lines : [];
+    if (sec.type === "chorus_repeat") continue;
     if (lines.length === 0) {
       problems.push(`Empty section "${sec.label || sec.type || "section"}"`);
     }
@@ -120,6 +123,14 @@ function validateSheetOutput(sheet: {
 }
 // ==== END CHORD NET ====
 
+const TUNING_VALUES: Record<string, string> = {
+  standard: "E A D G B E",
+  half: "Eb Ab Db Gb Bb Eb",
+  drop_d: "D A D G B E",
+  other: "Other"
+};
+const GENRES = ["worship", "country", "rock", "pop"];
+
 // Convert validated structured sheet JSON into canonical ChordPro
 function sheetToChordPro(sheet: {
   title: string;
@@ -128,7 +139,7 @@ function sheetToChordPro(sheet: {
   capo?: number;
   tempo?: number | null;
   time_signature?: string | null;
-  notes?: string | null;
+  tuning?: string | null;
   sections: Array<{
     type: string;
     label?: string | null;
@@ -143,19 +154,32 @@ function sheetToChordPro(sheet: {
   if (sheet.capo && sheet.capo > 0) out.push(`{capo: ${sheet.capo}}`);
   if (sheet.tempo && sheet.tempo > 0) out.push(`{tempo: ${sheet.tempo}}`);
   if (sheet.time_signature && sheet.time_signature.trim()) out.push(`{time: ${sheet.time_signature.trim()}}`);
-  if (sheet.notes && sheet.notes.trim()) out.push(`{meta_note: ${sheet.notes.trim()}}`);
+  const tuning = TUNING_VALUES[sheet.tuning || "standard"];
+  if (tuning && tuning !== TUNING_VALUES.standard) out.push(`{tuning: ${tuning}}`);
   out.push("");
 
   sheet.sections.forEach((sec, idx) => {
     const t = (sec.type || "verse").toLowerCase();
-    const tag = ["verse", "chorus", "bridge", "intro", "outro", "instrumental", "tab"].includes(t) ? t : "verse";
+    if (t === "chorus_repeat") {
+      out.push("{chorus}");
+      if (idx < sheet.sections.length - 1) out.push("");
+      return;
+    }
+    const tag = ["verse", "chorus", "bridge", "intro", "outro", "instrumental", "pre_chorus", "tab"].includes(t) ? t : "verse";
     const label = sec.label ? sec.label.trim() : "";
     out.push(label ? `{start_of_${tag}: ${label}}` : `{start_of_${tag}}`);
     if (sec.sidebar_note && sec.sidebar_note.trim()) {
       out.push(`{note: ${sec.sidebar_note.trim()}}`);
     }
     for (const l of sec.lines || []) {
-      if (l.text != null) out.push(String(l.text));
+      if (l.text == null) continue;
+      const text = String(l.text);
+      // A line that is only a note in parentheses, like "(Repeat 4x)", prints as a comment.
+      if (!l.tab && /^\((?:repeat|x\d|\d+x)[^)]*\)$/i.test(text.trim())) {
+        out.push(`{comment: ${text.trim().slice(1, -1)}}`);
+      } else {
+        out.push(text);
+      }
     }
     out.push(`{end_of_${tag}}`);
     if (idx < sheet.sections.length - 1) out.push("");
@@ -243,26 +267,29 @@ async function readCapped(res: Response, maxBytes = MAX_PAGE_BYTES): Promise<str
 const SHEET_SCHEMA = {
   type: "object",
   properties: {
-    title: { type: "string" },
+    title: { type: "string", description: "Song title only (not the artist, album, or site name)" },
     artist: { type: ["string", "null"] },
-    key: { type: "string", description: "Written guitar shapes key, e.g. 'G', 'C', 'Em', 'Bb'" },
+    key: { type: "string", description: "Key of the chord shapes as written, e.g. 'G', 'D', 'Em', 'Bb'" },
     capo: { type: "integer", description: "Capo fret 0-12 (0 if none)" },
-    tempo: { type: ["integer", "null"] },
-    time_signature: { type: ["string", "null"] },
+    tuning: { type: "string", enum: ["standard", "half", "drop_d", "other"], description: "'half' = half step down (Eb tuning)" },
+    tempo: { type: "integer", description: "Beats per minute. Use the stated tempo; otherwise the tempo of the well-known recording; otherwise your best estimate for the style." },
+    time_signature: { type: "string", description: "e.g. '4/4', '3/4', '6/8'" },
+    genre: { type: "string", enum: ["worship", "country", "rock", "pop"], description: "worship = Christian worship or hymns; country = country and folk; rock = rock, punk, emo, indie, alternative; pop = everything else" },
+    form: { type: "string", description: "The order the song is played, e.g. 'Intro (4x) • V1 • Chorus • V2 • Chorus • Bridge (2x) • Chorus • Outro'" },
     sections: {
       type: "array",
       items: {
         type: "object",
         properties: {
-          type: { type: "string", enum: ["verse", "chorus", "bridge", "intro", "outro", "instrumental", "tab"] },
-          label: { type: ["string", "null"], description: "e.g. 'Intro', 'Verse 1', 'Chorus'" },
-          sidebar_note: { type: ["string", "null"], description: "Optional performance or dynamic note for this section" },
+          type: { type: "string", enum: ["verse", "chorus", "chorus_repeat", "pre_chorus", "bridge", "intro", "outro", "instrumental", "tab"] },
+          label: { type: ["string", "null"], description: "e.g. 'Intro (4x)', 'Verse 1', 'Chorus', 'Bridge (2x)'" },
+          sidebar_note: { type: ["string", "null"], description: "Short playing cue from the source for this section, e.g. 'Palm muted', 'Bass comes in'" },
           lines: {
             type: "array",
             items: {
               type: "object",
               properties: {
-                text: { type: "string", description: "Lyric text with [Chord] inline directly before the syllable it is played on, e.g. '[G]Thank you [G/B]for the [C]cross, [G]Lord.'" },
+                text: { type: "string", description: "One sung line with each [Chord] directly before the syllable it is played on, e.g. '[G]Rivers run [C]down to the [D]sea'. Chord-only lines look like '[G]   [C]   [D]'." },
                 tab: { type: "boolean" }
               },
               required: ["text", "tab"]
@@ -272,33 +299,53 @@ const SHEET_SCHEMA = {
         required: ["type", "label", "sidebar_note", "lines"]
       }
     },
-    notes: { type: ["string", "null"], description: "General playing notes or transcription notes" }
+    notes: { type: ["string", "null"], description: "Anything a player needs that isn't in a section, or null" }
   },
-  required: ["title", "artist", "key", "capo", "tempo", "time_signature", "sections", "notes"]
+  required: ["title", "artist", "key", "capo", "tuning", "tempo", "time_signature", "genre", "form", "sections", "notes"]
 };
 
-const SYSTEM_PROMPT = `You are an expert guitar transcriber for Chord Book.
-Convert the user's input (messy/collapsed text, 1-6 overlapping screenshot snips, a camera photo of a chord chart, or a PDF) into a clean, accurate structured guitar chord sheet.
-RULES:
-1. Transcription fidelity: Never 'improve' or alter the user's chords. Place every chord inside square brackets [ ] directly before the exact syllable or word it sits above.
-2. Multi-snip stitching: When given multiple screenshots that overlap (e.g. scrolling down Ultimate Guitar), stitch and deduplicate overlapping lines so each section (Intro, Verse 1, Verse 2, Chorus, Bridge) appears once in proper order.
-3. Collapsed single-line pastes & chord-timing quality checks: When chords are jammed inline ahead of a sentence (e.g. 'C Dsus4 D G Walk the long road back home.'), align each chord over the natural metrically stressed syllable of that lyric line ('Walk the long [C]road [Dsus4]back [D]home. [G]'). Never drop downbeat chords onto weak pickup articles ('The', 'A', 'And', 'In') when they belong on the following content noun/verb, and align bass walkdowns (like D -> D/C -> G/B -> C) accurately across the start and end syllables of the target phrase (e.g. 'The [D]lantern of [D/C]harbor [G/B]lighthou[C]se (light[D]house)').
-4. Valid chords only inside [ ]: Never put section headers like [Verse] inside line text—use the section object's type and label instead. Every [ ] in a line must be a valid guitar chord token (like [G], [G/B], [Dsus4], [D/F#], [Am7], [Cadd9]).`;
+const SYSTEM_PROMPT = `You turn guitar chord sheets into clean Chord Book sheets. People read them while playing guitar and singing, so every chord must sit on the right word and every line must read like the song.
 
+The input may be a messy copy from a chord website, screenshots, a photo, a PDF, or an existing sheet to check.
+
+READ THE MESS:
+- Phone copies from sites like Chordie or AZChords put each chord and the word under it on separate lines, and break one sung line into many short pieces. A chord on its own line belongs on the word right after it. Put the pieces back into the original sung lines, about one phrase per line.
+- Drop site clutter: album names, years, "this is 100% correct", ratings, chord voicing lists like "D - x57775", fret numbers, ads, and page buttons.
+- Sites often list the artist first, then the title. Return the song title as title and the band or singer as artist.
+- Read "Key:", "Capo:", tuning notes ("half step down", "Eb tuning", "Drop D"), and tempo when given.
+
+KEEP IT FAITHFUL:
+- Never change, add, or simplify chords. Never rewrite lyrics. Keep backing vocals in parentheses as their own lines.
+- A dashed chord run like "A/C#-D" means quick changes: write it as "[A/C#] [D]".
+- "G (hold)" means hold that chord: put [G] on the next word and keep "(hold)" right after it.
+- Every [ ] holds only a real chord, like [G], [G/B], [Dsus4], [F#m], [Am7]. Section names never go in brackets.
+- Place each chord before the stressed syllable it is played on. A chord in the middle of a word goes in the middle: "un[Bm]less".
+
+ORGANIZE IT:
+- One section per part, in the order it is played, labeled Intro, Verse 1, Verse 2, Pre-Chorus, Chorus, Bridge, Outro, or Interlude. Always call the chorus "Chorus", never "Refrain".
+- Write the chorus out in full the first time. Each later time it is played, add a section of type "chorus_repeat" with no lines. Do this for "(Repeat Chorus)" notes too.
+- When a whole section repeats, put the count in its label: "Bridge (2x)". When only some lines repeat, add a line "(Repeat 4x)" after them.
+- Notes after a section name, like "Intro: ... Palm muted" or "Verse 1: Bass will enter", become that section's sidebar_note. Chords written after "Intro:" become the intro's chord line.
+- "form" lists every section as played, using V1, V2 for verses and "Chorus" for each chorus, with repeat counts.`;
+
+// Same RPC and token accounting as House Index (supabase/sql/v1.9-part1.sql). Never throws.
 // deno-lint-ignore no-explicit-any
-async function logAiCall(client: any, task: string, model: string, valid: boolean, ms: number, usage?: any) {
+async function logAiCall(client: any, task: string, model: string, valid: boolean, ms: number, usage?: any, userId?: string) {
   try {
-    await client.rpc("log_ai_call", {
+    const input = usage?.input_tokens;
+    const { error } = await client.rpc("log_ai_call", {
       p_task: task,
       p_model: model,
       p_valid: valid,
       p_latency_ms: Math.round(ms),
       p_escalated: false,
-      p_input_tokens: usage?.input_tokens ?? null,
+      p_input_tokens: input == null ? null : input + (usage?.cache_creation_input_tokens ?? 0),
       p_output_tokens: usage?.output_tokens ?? null,
       p_cache_read_tokens: usage?.cache_read_input_tokens ?? null,
-      p_web_searches: null
+      p_web_searches: null,
+      p_user_id: userId ?? null
     });
+    if (error) console.error("log_ai_call failed:", error.message ?? error);
   } catch (e) {
     console.error("log_ai_call failed:", e);
   }
@@ -320,6 +367,7 @@ Deno.serve(async (req: Request) => {
   if (userErr || !userData?.user) {
     return json({ error: "Please sign in to use AI import." });
   }
+  const userId = userData.user.id;
 
   if (!ANTHROPIC_API_KEY) {
     return json({ error: "AI import is not configured on this server (missing ANTHROPIC_API_KEY)." });
@@ -449,7 +497,8 @@ Deno.serve(async (req: Request) => {
       },
       body: JSON.stringify({
         model,
-        max_tokens: 4096,
+        // Billed on actual output, so a long song's headroom costs nothing extra.
+        max_tokens: 8192,
         system: SYSTEM_PROMPT,
         tools: [{
           name: "save_chord_sheet",
@@ -463,9 +512,11 @@ Deno.serve(async (req: Request) => {
     const ms = performance.now() - t0;
     const payload = await res.json();
     if (!res.ok) {
-      await logAiCall(supabase, "cb_import", model, false, ms, payload?.usage);
+      await logAiCall(supabase, "cb_import", model, false, ms, payload?.usage, userId);
       throw new Error(payload?.error?.message || `Anthropic HTTP ${res.status}`);
     }
+    if (payload?.stop_reason === "refusal") throw new Error("REFUSED");
+    if (payload?.stop_reason === "max_tokens") throw new Error("TOO_LONG");
     // deno-lint-ignore no-explicit-any
     const toolBlock = (payload?.content || []).find((b: any) => b.type === "tool_use" && b.name === "save_chord_sheet");
     return { toolInput: toolBlock?.input || null, usage: payload?.usage, ms, stopReason: payload?.stop_reason };
@@ -476,7 +527,7 @@ Deno.serve(async (req: Request) => {
     const messages: any[] = [{ role: "user", content: userContent }];
     let attempt = await callClaude(messages);
     let problems = validateSheetOutput(attempt.toolInput);
-    await logAiCall(supabase, "cb_import", model, problems.length === 0, attempt.ms, attempt.usage);
+    await logAiCall(supabase, "cb_import", model, problems.length === 0, attempt.ms, attempt.usage, userId);
 
     if (problems.length > 0 && attempt.toolInput) {
       // Repair once
@@ -494,28 +545,36 @@ Deno.serve(async (req: Request) => {
       });
       attempt = await callClaude(messages);
       problems = validateSheetOutput(attempt.toolInput);
-      await logAiCall(supabase, "cb_import_repair", model, problems.length === 0, attempt.ms, attempt.usage);
+      await logAiCall(supabase, "cb_import_repair", model, problems.length === 0, attempt.ms, attempt.usage, userId);
     }
 
     if (problems.length > 0 || !attempt.toolInput) {
       return json({ error: `Couldn’t validate the transcribed chords (${problems.join(", ")}). Try pasting the text directly.` });
     }
 
-    const chordpro = sheetToChordPro(attempt.toolInput);
+    const sheet = attempt.toolInput;
+    const chordpro = sheetToChordPro(sheet);
+    const tempo = Number(sheet.tempo);
     return json({
       result: {
-        title: attempt.toolInput.title,
-        artist: attempt.toolInput.artist,
-        key: attempt.toolInput.key,
-        capo: attempt.toolInput.capo || 0,
-        tempo: attempt.toolInput.tempo,
-        time_signature: attempt.toolInput.time_signature,
-        notes: attempt.toolInput.notes,
+        title: sheet.title,
+        artist: sheet.artist,
+        key: sheet.key,
+        capo: sheet.capo || 0,
+        tempo: tempo >= 20 && tempo <= 300 ? Math.round(tempo) : null,
+        time_signature: sheet.time_signature || "4/4",
+        tuning: TUNING_VALUES[sheet.tuning] || TUNING_VALUES.standard,
+        genre: GENRES.includes(sheet.genre) ? sheet.genre : "pop",
+        form: typeof sheet.form === "string" ? sheet.form.replace(/^form:\s*/i, "").trim() : "",
+        notes: sheet.notes,
         chordpro
       }
     });
   } catch (err) {
     console.error("import-sheet error:", err);
-    return json({ error: "AI transcription failed — try again or paste the text directly." });
+    const msg = err instanceof Error ? err.message : "";
+    if (msg === "REFUSED") return json({ error: "The AI declined to read that. Try the pasted text instead." });
+    if (msg === "TOO_LONG") return json({ error: "That song was too long to read in one go. Try pasting it in two parts." });
+    return json({ error: "The AI couldn’t read that. Try again, or the app can format it without AI." });
   }
 });

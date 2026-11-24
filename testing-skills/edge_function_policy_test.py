@@ -51,6 +51,11 @@ def main():
     check("Enforces increment_ai_usage daily cap", 'rpc("increment_ai_usage"' in src)
     check("Fails closed with LIMIT_CHECK_FAILED", "LIMIT_CHECK_FAILED" in src and "typeof capCount !== \"number\"" in src)
     check("Logs AI calls with token usage via log_ai_call", 'rpc("log_ai_call"' in src and "p_input_tokens" in src)
+    check("Logs the caller's user id like House Index", "p_user_id: userId" in src)
+    check("Returns genre, tuning, form, and tempo for the sheet",
+          all(f in src for f in ('genre:', 'tuning:', 'form:', 'tempo:')) and '"chorus_repeat"' in src)
+    check("A repeated chorus may have no lines", 'sec.type === "chorus_repeat") continue' in src)
+    check("No real lyrics in the prompt (made-up examples only)", "Rivers run" in src and "slit" not in src)
     check("Uses SSRF safety helpers (parseAllowedUrl, resolvesPublic, readCapped)",
           "parseAllowedUrl(" in src and "resolvesPublic(" in src and "readCapped(" in src)
     check("Supports text, multi-snip image, PDF document, and url modes",

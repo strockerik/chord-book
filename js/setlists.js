@@ -222,7 +222,7 @@ export function renderSetlistsSheetHTML(allSongs = [], { onOpenSong, onRefresh }
             </label>
             <label class="checkbox-pill">
               <input type="checkbox" id="export-compact-chorus" />
-              <span>Shorten repeated choruses</span>
+              <span>Hide repeated choruses</span>
             </label>
             <label class="checkbox-pill">
               <input type="checkbox" id="export-include-cover" />

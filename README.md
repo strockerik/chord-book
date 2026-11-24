@@ -12,7 +12,7 @@
 | **Typography** | Self-hosted `Fraunces` (titles), `Public Sans` (lyrics & UI), and `IBM Plex Mono` bold (chords & tabs) under SIL OFL in `fonts/`. |
 | **Backend** | Shared House Index Supabase project (`config.js`), using `cb_songs`, `cb_setlists`, `cb_setlist_items`, `cb_song_shares`, and `cb_song_revisions` so it never collides with recipe or bottle tables. |
 | **8.5×11" Sheet Engine** | `js/fit.js` starts every song at a standard **11pt** and never enlarges text to fill space. If a song doesn't fit, it tries two columns, slightly snugger spacing, printing repeated choruses once, wrapped lines, and at most 10.5pt text. If it still doesn't fit, it continues on another page rather than being squeezed. Screen and print share these rules. |
-| **Multi-Modal Import** | `js/chordpro.js` + `js/ai.js` + `supabase/functions/import-sheet/index.ts` handles: (1) ugly collapsed single-line pastes (free & instant), (2) standard 2-line tabs, (3) 1–6 overlapping screenshot snips (paste with `Cmd+V` or drag/drop), (4) phone camera photos, and (5) uploaded PDFs. |
+| **Multi-Modal Import** | `js/chordpro.js` + `js/ai.js` + `supabase/functions/import-sheet/index.ts` handles: (1) pasted text of any kind (AI when signed in, free on-device formatting otherwise, including phone copies of chord sites), (2) 1–6 overlapping screenshot snips (paste with `Cmd+V` or drag/drop), (3) phone camera photos, and (4) uploaded PDFs. After any change to `index.ts`, paste it into the Supabase dashboard again to redeploy. |
 | **Sidebar Margin Notes** | Dedicated right-hand margin rail on every section for dynamic cues (*"Start quiet and get louder over this verse"*, *"Key change here"*), editable inline with one tap and stored in both ChordPro `{note: ...}` directives and `layout_prefs.sidebar_notes`. |
 | **Vocal Key Analytics** | `js/analytics.js` computes each song's **Concert Sounding Pitch Key** ($\text{Written Shapes Key} + \text{Preferred Transpose} + \text{Capo}$), ranks your best singing tonal centers (`A / F#m`, `G / Em`, etc.), and recommends keys and capo positions for new songs. |
 
@@ -80,7 +80,9 @@ python3 testing-skills/behaviour_test.py
 - The editor asks before discarding unsaved work, and an imported sheet counts as unsaved.
 - Touch targets are at least 44px, and form fields are 16px on touch screens so iOS doesn't zoom.
 - Sheets are read while playing and singing. They start at 11pt, never go below 10.5pt, and never grow to fill a page. A long song takes another page.
-- Every sheet uses the same format: title, artist, key, capo, a `Form:` line, and labeled sections. Repeated choruses print once.
+- Every sheet uses the same format: title, artist, key, capo, a `Form:` line, and labeled sections.
+- Choruses are written out every time they're sung. Only when a song won't fit on one page does the fit print a repeat as "Repeat Chorus". "Hide repeated choruses" in More does that on purpose.
+- Paste import is one button. Signed in, `import-sheet` reads the paste with Sonnet 4.6 and returns the title, artist, genre, tuning, tempo, Form, and aligned sections. Signed out, or if the AI can't be reached, `smartImportText` formats it on the device, including chord sites copied on a phone (Chordie, AZChords), where each chord and word lands on its own line.
 - Genre stays broad: Worship, Country & Folk, Rock & Alternative, and Pop & Other. It's stored in `layout_prefs.genre`, and a song without one is Worship.
 - Auto-scroll is one steady speed per song: `js/timing.js` estimates length from BPM, time signature, the `Form:` line, intros, interludes, and repeats, then Play divides the current screen distance by that length.
 - Tuning is one of Standard, Half step down, Drop D, or Other. Half step down lowers every "Sounds in" key and vocal suggestion by one semitone.
