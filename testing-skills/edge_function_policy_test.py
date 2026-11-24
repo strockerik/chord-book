@@ -62,6 +62,7 @@ def main():
           "// ==== LAYOUT ====" in src and src.count("tidySheet(attempt.toolInput);") == 2
           and "realignToLayout(sheet.sections, exact, isValidChordToken);" in src
           and "layoutFromSourceText(sheet.source_text, isValidChordToken)" in src
+          and "sheet.monospaced === true" in src
           and "applyPlacementNotes(sheet.sections);" in src
           and "pdfLayoutLines(bytes)" in src and "snapLayoutLine(l)" in src)
     check("Daily limit skips only accounts listed in the CB_UNLIMITED_EMAILS secret",

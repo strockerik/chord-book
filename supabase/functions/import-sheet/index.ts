@@ -409,17 +409,30 @@ function realignToLayout(
     if (key.length < 6) continue;
     byWords.set(key, [...(byWords.get(key) || []), line]);
   }
+  // The same words can come back with different chords ("Boys like you…" over Bm, then over G),
+  // so each source line is used once, in order.
+  const used = new Map<string, number>();
   let changed = 0;
   for (const sec of sections || []) {
+    if (sec.type === "chorus_repeat") continue;
     for (const line of sec.lines || []) {
       if (line.tab || typeof line.text !== "string") continue;
-      const candidates = byWords.get(wordsKey(line.text));
+      const key = wordsKey(line.text);
+      const candidates = byWords.get(key);
       if (!candidates) continue;
       const mine = chordList(line.text);
-      const match = candidates.find((c) => chordList(c).length === mine.length);
-      if (!match || match === line.text) continue;
-      line.text = match;
-      changed++;
+      let next = used.get(key) ?? 0;
+      while (next < candidates.length && chordList(candidates[next]).length !== mine.length) next++;
+      // A chorus printed once but sung again in the source: start over at its first copy.
+      if (next >= candidates.length) {
+        next = candidates.findIndex((c) => chordList(c).length === mine.length);
+        if (next < 0) continue;
+      }
+      used.set(key, next + 1);
+      if (candidates[next] !== line.text) {
+        line.text = candidates[next];
+        changed++;
+      }
     }
   }
   return changed;
@@ -760,12 +773,18 @@ const SOURCE_TEXT_FIELD = {
   type: "string",
   description: "Write this first. The chord sheet exactly as it appears, line by line in reading order (column one, then column two), each chord line directly above its lyric line, with spaces putting every chord over the exact letter it sits on, as in a monospaced chord chart. Include section names. Leave out clutter."
 };
+// Copying spacing only works for fixed-width type (chord apps, many chord sites), where every
+// letter sits in a column. Printed hymn sheets use ordinary type, so the copy can't be trusted.
+const MONOSPACED_FIELD = {
+  type: "boolean",
+  description: "Write this first. True when the sheet is set in a fixed-width (typewriter-style) font where letters line up in columns, as in most chord apps; false for ordinary printed type."
+};
 function schemaFor(withSource: boolean) {
   if (!withSource) return SHEET_SCHEMA;
   return {
     ...SHEET_SCHEMA,
-    properties: { source_text: SOURCE_TEXT_FIELD, ...SHEET_SCHEMA.properties },
-    required: ["source_text", ...SHEET_SCHEMA.required]
+    properties: { monospaced: MONOSPACED_FIELD, source_text: SOURCE_TEXT_FIELD, ...SHEET_SCHEMA.properties },
+    required: ["monospaced", "source_text", ...SHEET_SCHEMA.required]
   };
 }
 
@@ -1040,9 +1059,12 @@ Deno.serve(async (req: Request) => {
     applyPlacementNotes(sheet.sections);
     const exact = layout.length
       ? layout
-      : (typeof sheet.source_text === "string" ? layoutFromSourceText(sheet.source_text, isValidChordToken) : []);
+      : (sheet.monospaced === true && typeof sheet.source_text === "string"
+        ? layoutFromSourceText(sheet.source_text, isValidChordToken)
+        : []);
     if (exact.length) realignToLayout(sheet.sections, exact, isValidChordToken);
     delete sheet.source_text;
+    delete sheet.monospaced;
   }
 
   // One song: ask, check every chord, and repair once if the check fails.
