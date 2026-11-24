@@ -55,9 +55,13 @@ def main():
     check("Returns genre, tuning, form, and tempo for the sheet",
           all(f in src for f in ('genre:', 'tuning:', 'form:', 'tempo:')) and '"chorus_repeat"' in src)
     check("A repeated chorus may have no lines", 'sec.type === "chorus_repeat") continue' in src)
-    check("No real lyrics in the prompt (made-up examples only)", "Rivers run" in src and "slit" not in src)
+    check("No real lyrics in the prompt (made-up examples only)",
+          "Down the [D]river in the [A]morning" in src
+          and not any(w in src for w in ("slit", "Fount", "Father's love", "dime a dozen", "Amazing grace")))
     check("Puts chords back where the source has them before checking",
-          "// ==== LAYOUT ====" in src and src.count("realignToLayout(attempt.toolInput.sections, layout, isValidChordToken)") == 2
+          "// ==== LAYOUT ====" in src and src.count("tidySheet(attempt.toolInput);") == 2
+          and "if (layout.length) realignToLayout(sheet.sections, layout, isValidChordToken);" in src
+          and "applyPlacementNotes(sheet.sections);" in src
           and "pdfLayoutLines(bytes)" in src and "snapLayoutLine(l)" in src)
     check("Daily limit skips only accounts listed in the CB_UNLIMITED_EMAILS secret",
           'Deno.env.get("CB_UNLIMITED_EMAILS")' in src and "if (!unlimited) {" in src and "@" not in src.split("CB_UNLIMITED_EMAILS")[1][:400])

@@ -451,6 +451,53 @@ function snapLayoutLine(line: string): string {
 }
 // ==== END LAYOUT ====
 
+// The AI lists the word under each chord before writing the line ("D over river, A over
+// morning"). When the line it wrote disagrees, rebuild the line from that list.
+// deno-lint-ignore no-explicit-any
+function applyPlacementNotes(sections: any[]): number {
+  let fixed = 0;
+  for (const sec of sections || []) {
+    for (const line of sec.lines || []) {
+      if (line.tab || typeof line.text !== "string" || typeof line.placement !== "string") continue;
+      const notes = [...line.placement.matchAll(/([A-G][^\s,;]*)\s+(?:over\s+["“]?([^\s,;"”]+)["”]?|at\s+end)/gi)]
+        .map((m) => ({ chord: m[1], anchor: m[2] || null }));
+      const chords = [...line.text.matchAll(/\[([^\]]+)\]/g)].map((m) => m[1]);
+      if (!notes.length || notes.length !== chords.length || notes.some((n, i) => n.chord !== chords[i])) continue;
+      const lyric = line.text.replace(/\[[^\]]*\]/g, "");
+      if (!lyric.trim()) continue;
+      const lower = lyric.toLowerCase();
+      const spots: number[] = [];
+      let cursor = 0;
+      let ok = true;
+      for (const n of notes) {
+        if (!n.anchor) { spots.push(lyric.length); continue; }
+        const a = n.anchor.toLowerCase().replace(/[.,!?;:]+$/, "");
+        // Prefer the anchor at the start of a word, then anywhere inside one.
+        let at = -1;
+        for (let i = lower.indexOf(a, cursor); i >= 0; i = lower.indexOf(a, i + 1)) {
+          if (i === 0 || !/[a-z']/i.test(lower[i - 1])) { at = i; break; }
+          if (at < 0) at = i;
+        }
+        if (at < 0) { ok = false; break; }
+        spots.push(at);
+        cursor = at;
+      }
+      if (!ok) continue;
+      let out = "";
+      for (let i = 0; i <= lyric.length; i++) {
+        notes.forEach((n, k) => { if (spots[k] === i) out += (i === lyric.length && lyric.length ? " " : "") + `[${n.chord}]`; });
+        if (i < lyric.length) out += lyric[i];
+      }
+      out = out.replace(/\s+/g, " ").trim();
+      if (out !== line.text.replace(/\s+/g, " ").trim()) { line.text = out; fixed++; }
+    }
+  }
+  return fixed;
+}
+
+// Chord voicing charts at the top of a page aren't part of the song.
+const NOT_SONG_SECTION = /chord (?:shapes?|diagrams?|charts?|voicings?)|voicings?|fingerings?/i;
+
 // Convert validated structured sheet JSON into canonical ChordPro
 function sheetToChordPro(sheet: {
   title: string;
@@ -642,10 +689,11 @@ const SHEET_SCHEMA = {
             items: {
               type: "object",
               properties: {
-                text: { type: "string", description: "One sung line with each [Chord] directly before the syllable it is played on, e.g. '[G]Rivers run [C]down to the [D]sea'. Chord-only lines look like '[G]   [C]   [D]'." },
+                placement: { type: "string", description: "Write this first. Each chord in the line, left to right, and the letters printed directly under its left edge to the end of that word: 'D over river, A over morning'. Part of a word for a chord inside a word: 'A over ter' for wa-ter. Use 'G at end' for a chord after the last word, and '' for a line with no chords." },
+                text: { type: "string", description: "The sung line with each [Chord] placed exactly as in placement, e.g. 'Down the [D]river in the [A]morning'. Chord-only lines look like '[G]   [C]   [D]'." },
                 tab: { type: "boolean" }
               },
-              required: ["text", "tab"]
+              required: ["placement", "text", "tab"]
             }
           }
         },
@@ -671,7 +719,7 @@ READ THE MESS:
 - Drop chord shape diagrams, finger charts, copyright and CCLI lines, "submitted by" lines, video links, and buttons like "View Lyrics". A small block of tab or fret numbers that only shows how to finger one chord (often under a chord name at the top) is a chord diagram, not part of the song.
 - Write the title in Title Case, even if the source is all capitals.
 - Artist is the performing artist. A hymn or chart with only writer credits ("Words and Music by...") uses the writers' names: "A & B" or "A, B & C". Only people or bands, never "Traditional" or "American folk tune". Use null when no name is given.
-- key is the key the song starts in, even if it changes key later.
+- key: use the key the source states ("Key - E", "Key: D"). If it states none, use the key the song starts in, even if it changes key later.
 - Section names in the source can be wrong. A chorus comes back with the same words; a section whose words never come back is a verse, even if the source calls it "Chorus" or "Refrain".
 - If the input holds more than one song, transcribe only the first one and list the others in other_songs.
 
@@ -680,7 +728,7 @@ KEEP IT FAITHFUL:
 - A dashed chord run like "A/C#-D" means quick changes: write it as "[A/C#] [D]".
 - "G (hold)" means hold that chord: put [G] on the next word and keep "(hold)" right after it.
 - Every [ ] holds only a real chord, like [G], [G/B], [Dsus4], [F#m], [Am7]. Section names never go in brackets.
-- Put each chord exactly where the source puts it: on the word or syllable printed directly under it. Don't move chords to where you think they belong. A line often starts with words before its first chord ("How [D]deep the Father's [Em]love"), so never pull the first chord to the start of the line unless the source puts it there. A chord in the middle of a word goes in the middle: "un[Bm]less".
+- Put each chord exactly where the source puts it: on the word or syllable printed directly under it. Don't move chords to where you think they belong. A line often starts with words before its first chord ("Down the [D]river in the [A]morning"), so never pull the first chord to the start of the line unless the source puts it there. A chord in the middle of a word goes in the middle: "un[Bm]less".
 - Hymns often print chords only on verse 1. When later verses are sung to the same tune, give them the same chords on the matching syllables, so every verse can be played.
 - Bar charts like "| A | C#m7 | Bsus |" become a chord-only line: "[A]   [C#m7]   [Bsus]".
 - Guitar tab (lines like "e|--3--" or "E:--3--") goes in a section of type "tab", copied exactly with tab true, under the part name from the source. Never invent chords that the source doesn't show.
@@ -903,7 +951,9 @@ Deno.serve(async (req: Request) => {
       await logAiCall(supabase, "cb_import", model, false, ms, payload?.usage, userId);
       const reason = String(payload?.error?.message || "").slice(0, 160);
       console.error(`Anthropic HTTP ${res.status}:`, reason);
-      if (/credit balance/i.test(reason)) throw new Error("NO_CREDIT");
+      if (/credit balance|usage limits/i.test(reason)) throw new Error("NO_CREDIT");
+      // The API won't write out the full words of some well-known songs.
+      if (/content filtering/i.test(reason)) throw new Error("FILTERED");
       throw new Error(`API:${res.status} ${reason}`);
     }
     if (payload?.stop_reason === "refusal") throw new Error("REFUSED");
@@ -911,6 +961,16 @@ Deno.serve(async (req: Request) => {
     // deno-lint-ignore no-explicit-any
     const toolBlock = (payload?.content || []).find((b: any) => b.type === "tool_use" && b.name === "save_chord_sheet");
     return { toolInput: toolBlock?.input || null, usage: payload?.usage, ms, stopReason: payload?.stop_reason };
+  }
+
+  // Chord placement from the AI's own word-by-word list, then from the source's exact layout
+  // where there is one; and no voicing charts.
+  // deno-lint-ignore no-explicit-any
+  function tidySheet(sheet: any) {
+    if (!sheet || !Array.isArray(sheet.sections)) return;
+    sheet.sections = sheet.sections.filter((sec: { label?: string | null }) => !NOT_SONG_SECTION.test(sec.label || ""));
+    applyPlacementNotes(sheet.sections);
+    if (layout.length) realignToLayout(sheet.sections, layout, isValidChordToken);
   }
 
   // One song: ask, check every chord, and repair once if the check fails.
@@ -923,7 +983,7 @@ Deno.serve(async (req: Request) => {
     // deno-lint-ignore no-explicit-any
     const messages: any[] = [{ role: "user", content }];
     let attempt = await callClaude(messages);
-    if (layout.length && attempt.toolInput?.sections) realignToLayout(attempt.toolInput.sections, layout, isValidChordToken);
+    tidySheet(attempt.toolInput);
     let problems = validateSheetOutput(attempt.toolInput);
     await logAiCall(supabase, focus ? "cb_import_more" : "cb_import", model, problems.length === 0, attempt.ms, attempt.usage, userId);
     if (problems.length > 0 && attempt.toolInput) {
@@ -940,7 +1000,7 @@ Deno.serve(async (req: Request) => {
         }]
       });
       attempt = await callClaude(messages);
-      if (layout.length && attempt.toolInput?.sections) realignToLayout(attempt.toolInput.sections, layout, isValidChordToken);
+      tidySheet(attempt.toolInput);
       problems = validateSheetOutput(attempt.toolInput);
       await logAiCall(supabase, "cb_import_repair", model, problems.length === 0, attempt.ms, attempt.usage, userId);
     }
@@ -990,7 +1050,8 @@ Deno.serve(async (req: Request) => {
     if (msg === "REFUSED") return json({ error: "The AI declined to read that. Try the pasted text instead." });
     if (msg === "TOO_LONG") return json({ error: "That song was too long to read in one go. Try pasting it in two parts." });
     if (msg === "BUSY") return json({ error: "The AI is busy right now. Try again in a minute." });
-    if (msg === "NO_CREDIT") return json({ error: "The AI account is out of credit. Add credit in the Anthropic console." });
+    if (msg === "NO_CREDIT") return json({ error: "The AI account has hit its spending limit. Raise it in the Anthropic console." });
+    if (msg === "FILTERED") return json({ error: "The AI won’t copy out the words of this song. Paste the song as text and the app will format it without AI." });
     // The API's own reason (never secret) helps the owner see what went wrong.
     const reason = msg.startsWith("API:") ? ` (${msg.slice(4)})` : "";
     return json({ error: `The AI couldn’t read that${reason}. Try again, or the app can format it without AI.` });
