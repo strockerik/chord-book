@@ -261,10 +261,24 @@ export function renderSectionHTML(sec, secIdx, opts = {}) {
       // A chord held after the last word stays with that word if the line wraps.
       const nextSeg = line.segments[segIdx + 1];
       const nextIsHeldChord = hasAnyLyric && !!rawLyric.trim() && !!nextSeg?.chord && !(nextSeg.lyric || "").trim();
-      pieces.push({
-        html: `<span class="cl-pair${chordOnlyClass}">${chordCell}${leadCell}</span>`,
-        joinsNext: !unfinished && (continuesWord || nextIsHeldChord)
-      });
+      const joinsNext = !unfinished && (continuesWord || nextIsHeldChord);
+      // A long stretch of words is split into one piece per word, so a line that has to wrap can
+      // break between any two words, not only where a chord starts. The chord stays on its word.
+      const words = hasAnyLyric ? leadText.match(/\S+\s*/g) : null;
+      if (words && words.length > 1 && !needsDash && /^\S/.test(leadText)) {
+        const emptyChord = `<span class="chord-cell is-empty" aria-hidden="true">&nbsp;</span>`;
+        words.forEach((word, w) => {
+          pieces.push({
+            html: `<span class="cl-pair${w === 0 ? chordOnlyClass : ""}">${w === 0 ? chordCell : emptyChord}<span class="lyric-cell">${lyricToHtml(word)}</span></span>`,
+            joinsNext: w === words.length - 1 ? joinsNext : false
+          });
+        });
+      } else {
+        pieces.push({
+          html: `<span class="cl-pair${chordOnlyClass}">${chordCell}${leadCell}</span>`,
+          joinsNext
+        });
+      }
       if (unfinished) {
         pieces.push({
           html: `<span class="cl-pair is-word-tail"><span class="chord-cell is-empty" aria-hidden="true">&nbsp;</span><span class="lyric-cell">${esc(unfinished[2]).replace(/ $/g, "&nbsp;")}</span></span>`,

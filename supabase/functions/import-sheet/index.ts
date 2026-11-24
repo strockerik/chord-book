@@ -425,6 +425,54 @@ function realignToLayout(
   return changed;
 }
 
+// Chord columns in a monospaced chord line, or null when the line isn't all chords.
+function chordColumns(line: string, isValid: (c: string) => boolean): Array<{ chord: string; col: number }> | null {
+  const out: Array<{ chord: string; col: number }> = [];
+  for (const m of line.matchAll(/\S+/g)) {
+    const raw = m[0].replace(/^[(\[]+|[)\],]+$/g, "");
+    if (!raw || /^[-–|/.]+$/.test(raw) || /^\(?x\d+\)?$|^\d+x$/i.test(raw)) continue;
+    // "A/C#-D" is two quick chords.
+    const parts = raw.split(/-(?=[A-G])/);
+    if (!parts.every((c) => isValid(c))) return null;
+    let col = m.index ?? 0;
+    for (const c of parts) { out.push({ chord: c, col }); col += c.length + 1; }
+  }
+  return out.length ? out : null;
+}
+
+/** Lyric lines with chords placed by column from a monospaced, chords-over-lyrics transcription. */
+function layoutFromSourceText(text: string, isValid: (c: string) => boolean): string[] {
+  const lines = String(text || "").replace(/\r/g, "").replace(/\t/g, "    ").split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length - 1; i++) {
+    const chords = chordColumns(lines[i], isValid);
+    if (!chords) continue;
+    const lyric = lines[i + 1];
+    if (!/[a-z]/i.test(lyric) || chordColumns(lyric, isValid)) continue;
+    const start = lyric.search(/\S/);
+    const slots = new Map<number, string[]>();
+    // Chords over the space before the first word are played before it; the last one lands on it.
+    const lead = chords.filter((c) => c.col < start);
+    const leadText = lead.slice(0, -1).map((c) => `[${c.chord}] `).join("");
+    if (lead.length) slots.set(start, [lead[lead.length - 1].chord]);
+    for (const { chord, col } of chords.slice(lead.length)) {
+      let at = Math.min(col, lyric.length);
+      // Over a space or a comma between words: it belongs to the next word.
+      while (at < lyric.length && /[\s,;:.!?)]/.test(lyric[at])) at++;
+      slots.set(at, [...(slots.get(at) || []), chord]);
+    }
+    let merged = "";
+    for (let k = 0; k <= lyric.length; k++) {
+      const here = slots.get(k) || [];
+      merged += k === lyric.length && k > 0 ? here.map((c) => ` [${c}]`).join("") : here.map((c) => `[${c}]`).join("");
+      if (k < lyric.length) merged += lyric[k];
+    }
+    out.push(snapLayoutLine((leadText + merged.trim()).replace(/\s+/g, " ").trim()));
+    i++;
+  }
+  return out;
+}
+
 /** Text pastes keep exact columns; this only moves chords that land inside a word to a syllable start. */
 function snapLayoutLine(line: string): string {
   const parts: Array<{ chord: string; at: number }> = [];
@@ -706,6 +754,21 @@ const SHEET_SCHEMA = {
   required: ["title", "artist", "key", "capo", "tuning", "tempo", "time_signature", "genre", "form", "sections", "notes", "other_songs"]
 };
 
+// Photos and links have no exact layout to check against, so for those the AI first copies the
+// sheet out verbatim, chords over lyrics, and the chords are placed by column from that copy.
+const SOURCE_TEXT_FIELD = {
+  type: "string",
+  description: "Write this first. The chord sheet exactly as it appears, line by line in reading order (column one, then column two), each chord line directly above its lyric line, with spaces putting every chord over the exact letter it sits on, as in a monospaced chord chart. Include section names. Leave out clutter."
+};
+function schemaFor(withSource: boolean) {
+  if (!withSource) return SHEET_SCHEMA;
+  return {
+    ...SHEET_SCHEMA,
+    properties: { source_text: SOURCE_TEXT_FIELD, ...SHEET_SCHEMA.properties },
+    required: ["source_text", ...SHEET_SCHEMA.required]
+  };
+}
+
 const SYSTEM_PROMPT = `You turn guitar chord sheets into clean Chord Book sheets. People read them while playing guitar and singing, so every chord must sit on the right word and every line must read like the song.
 
 The input may be a messy copy from a chord website, screenshots, a photo, a PDF, or an existing sheet to check.
@@ -738,6 +801,7 @@ ORGANIZE IT:
 - Write the chorus out in full the first time. Each later time it is played, add a section of type "chorus_repeat" with no lines. Do this for "(Repeat Chorus)" notes too.
 - When a whole section repeats, put the count in its label: "Bridge (2x)". When only some lines repeat, add a line "(Repeat 4x)" after them.
 - Notes after a section name, like "Intro: ... Palm muted" or "Verse 1: Bass will enter", become that section's sidebar_note. Chords written after "Intro:" become the intro's chord line.
+- Keep the source's line breaks where it has real lines. Rebuild lines only for phone copies that split them apart. A sung line longer than about 40 characters is easier to read while playing, so break it at a natural phrase.
 - "form" lists every section as played, using V1, V2 for verses and "Chorus" for each chorus, with repeat counts.`;
 
 // Same RPC and token accounting as House Index (supabase/sql/v1.9-part1.sql). Never throws.
@@ -802,6 +866,8 @@ Deno.serve(async (req: Request) => {
 
   // Where the source says each chord sits, used to correct the AI's chord placement.
   let layout: string[] = [];
+  // Set below for photos and links.
+  let withSource = false;
 
   if (reqType === "text") {
     if (Array.isArray(body?.layout)) {
@@ -838,6 +904,7 @@ Deno.serve(async (req: Request) => {
         "Transcribe the guitar chord sheet from these image(s). If multiple screenshots overlap, stitch and deduplicate them into one complete song with exact [Chord] placement over each syllable."
     });
     model = MODEL_VISION;
+    withSource = true;
   } else if (reqType === "pdf") {
     const pdfData = typeof body?.pdfData === "string" ? body.pdfData.trim() : "";
     if (!pdfData) return json({ error: "Attach a PDF file first." });
@@ -892,6 +959,7 @@ Deno.serve(async (req: Request) => {
       type: "text",
       text: (note ? `User note: ${note}\n\n` : "") + `Extract the chord sheet from this page (${url.hostname}):\n\n${pageText}`
     });
+    withSource = true;
     model = MODEL_TEXT;
   } else {
     return json({ error: "Unsupported import type." });
@@ -932,7 +1000,7 @@ Deno.serve(async (req: Request) => {
         tools: [{
           name: "save_chord_sheet",
           description: "Return the transcribed guitar chord sheet",
-          input_schema: SHEET_SCHEMA
+          input_schema: schemaFor(withSource)
         }],
         tool_choice: { type: "tool", name: "save_chord_sheet" },
         messages
@@ -970,7 +1038,11 @@ Deno.serve(async (req: Request) => {
     if (!sheet || !Array.isArray(sheet.sections)) return;
     sheet.sections = sheet.sections.filter((sec: { label?: string | null }) => !NOT_SONG_SECTION.test(sec.label || ""));
     applyPlacementNotes(sheet.sections);
-    if (layout.length) realignToLayout(sheet.sections, layout, isValidChordToken);
+    const exact = layout.length
+      ? layout
+      : (typeof sheet.source_text === "string" ? layoutFromSourceText(sheet.source_text, isValidChordToken) : []);
+    if (exact.length) realignToLayout(sheet.sections, exact, isValidChordToken);
+    delete sheet.source_text;
   }
 
   // One song: ask, check every chord, and repair once if the check fails.

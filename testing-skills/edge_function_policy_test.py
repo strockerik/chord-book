@@ -60,7 +60,8 @@ def main():
           and not any(w in src for w in ("slit", "Fount", "Father's love", "dime a dozen", "Amazing grace")))
     check("Puts chords back where the source has them before checking",
           "// ==== LAYOUT ====" in src and src.count("tidySheet(attempt.toolInput);") == 2
-          and "if (layout.length) realignToLayout(sheet.sections, layout, isValidChordToken);" in src
+          and "realignToLayout(sheet.sections, exact, isValidChordToken);" in src
+          and "layoutFromSourceText(sheet.source_text, isValidChordToken)" in src
           and "applyPlacementNotes(sheet.sections);" in src
           and "pdfLayoutLines(bytes)" in src and "snapLayoutLine(l)" in src)
     check("Daily limit skips only accounts listed in the CB_UNLIMITED_EMAILS secret",
