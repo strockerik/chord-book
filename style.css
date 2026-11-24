@@ -990,8 +990,14 @@ button, input, select, textarea {
 }
 .sheet-page.is-two-col .song-section {
   break-inside: avoid;
-  margin-bottom: var(--sheet-section-gap, 10px);
+  /* Padding, not margin: Safari carries a margin across the column break, which pushed the
+     right column's first section down. */
+  padding-bottom: var(--sheet-section-gap, 10px);
   grid-template-columns: 1fr;
+}
+/* The fit marks the section that ends each column; it needs no gap below it. */
+.sheet-page.is-two-col .song-section.is-column-end {
+  padding-bottom: 0;
 }
 .sheet-page.is-two-col .section-sidebar-rail {
   border-left: none;
@@ -1428,7 +1434,21 @@ button, input, select, textarea {
 .snip-thumb img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* Show the whole photo so you can tell which way is up. */
+  object-fit: contain;
+}
+.snip-rotate-btn {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 99px;
+  border: none;
+  background: rgba(15, 23, 42, 0.78);
+  color: #fff;
+  font-size: 1.25rem;
+  cursor: pointer;
 }
 .snip-badge {
   position: absolute;
@@ -1445,8 +1465,8 @@ button, input, select, textarea {
   position: absolute;
   top: 4px;
   right: 4px;
-  min-width: 28px;
-  min-height: 28px;
+  min-width: 44px;
+  min-height: 44px;
   border-radius: 99px;
   border: none;
   background: rgba(185, 28, 28, 0.9);

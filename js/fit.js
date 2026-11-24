@@ -218,6 +218,26 @@ export function fitLadder({ targetPt, minPt, columnChoices, setType, setLayout, 
   return { pt: minPt, cols: lastCols, wrap: true, fits: false };
 }
 
+/**
+ * In two columns, the section that ends a column gets no gap below it, so the gap never counts
+ * against the page and Safari can't carry it to the top of the next column.
+ */
+export function markColumnEnds(page) {
+  const sections = Array.from(page.querySelectorAll(".sheet-sections-flow > .song-section"));
+  if (!page.classList.contains("is-two-col")) {
+    for (const s of sections) s.classList.remove("is-column-end");
+    return;
+  }
+  // Twice, because dropping a gap can move a section to the other column.
+  for (let pass = 0; pass < 2; pass++) {
+    sections.forEach((s, i) => {
+      const next = sections[i + 1];
+      const ends = !next || next.getBoundingClientRect().left - s.getBoundingClientRect().left > 4;
+      s.classList.toggle("is-column-end", ends);
+    });
+  }
+}
+
 /** Prints an exact repeat of a chorus once. A chorus in a new key is not a repeat. */
 export function collapseRepeatedChoruses(pages) {
   const seen = new Set();
@@ -269,6 +289,7 @@ export function autoFitLetterPages(pageEls, { columnsPref = "auto", fontOffset =
 
   const checkPagesFit = () => {
     for (const p of pageEls) {
+      markColumnEnds(p);
       if (p.scrollHeight > p.clientHeight + 1) return false;
       const flow = p.querySelector(".sheet-sections-flow");
       if (flow) {

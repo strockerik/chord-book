@@ -247,11 +247,25 @@ function renderStagedImages() {
       <div class="snip-thumb" data-snip-idx="${idx}">
         <img src="${img.previewUrl}" alt="Staged snip ${idx + 1}" />
         <span class="snip-badge">#${idx + 1}</span>
+        <button type="button" class="snip-rotate-btn" data-rotate-snip="${idx}" aria-label="Turn photo ${idx + 1} a quarter turn" title="Turn so the words read upright">⟳</button>
         <button type="button" class="snip-remove-btn" data-remove-snip="${idx}" aria-label="Remove snip ${idx + 1}">×</button>
       </div>
     `
     )
     .join("");
+
+  // Sideways photos read worse: chords get matched to the wrong line.
+  grid.querySelectorAll("[data-rotate-snip]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const idx = parseInt(btn.getAttribute("data-rotate-snip"), 10);
+      try {
+        stagedImages[idx] = await rotateStagedImage(stagedImages[idx]);
+        renderStagedImages();
+      } catch {
+        toastError("Couldn’t turn that photo.");
+      }
+    });
+  });
 
   grid.querySelectorAll("[data-remove-snip]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -349,6 +363,25 @@ async function edgeErrorText(error) {
     if (body?.error) return String(body.error).replace(/\.$/, "");
   } catch { /* not JSON */ }
   return "The AI import had a problem";
+}
+
+/** Turns a staged photo a quarter turn clockwise. */
+async function rotateStagedImage(img) {
+  const el = await new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = img.previewUrl;
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = el.height;
+  canvas.height = el.width;
+  const ctx = canvas.getContext("2d");
+  ctx.translate(canvas.width, 0);
+  ctx.rotate(Math.PI / 2);
+  ctx.drawImage(el, 0, 0);
+  const previewUrl = canvas.toDataURL("image/jpeg", 0.85);
+  return { ...img, mediaType: "image/jpeg", data: previewUrl.split(",")[1], previewUrl };
 }
 
 /**

@@ -51,6 +51,8 @@ ELEVATE = ["10,000 Reasons (Bless The Lord)", "Jesus Paid It All (O Praise The O
 CASES = [
     ("photo-great-are-you-lord", "Phone photo of a printed chart with bar-line intro", "image", ["IMG_5320.jpeg"], []),
     ("photo-all-must-be-well", "Sideways phone photo, chords on verse 1 only", "image", ["IMG_5321.jpeg"], []),
+    ("photo-all-must-be-well-upright", "The same page photographed upright", "image", ["IMG_5321 rotated.jpeg"], []),
+    ("shot-amazing-grace-user", "Screenshot of a two-column chord site page", "image", ["Amazing Grace-user.png"], []),
     ("photo-come-thou-fount", "Phone photo of a hymn, chords on verse 1 only", "image", ["IMG_5322.jpeg"], []),
     ("photo-jesus-i-come", "Two photos of the same sideways, two-column page", "image", ["IMG_5323.jpeg", "IMG_5323 2.jpeg"], []),
     ("shot-im-on-fire", "One screenshot of a chords-over-lyrics site", "image", ["Pasted 2026-11-24 at 3.13.51 PM.png"], []),
