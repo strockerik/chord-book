@@ -1,9 +1,9 @@
 // Service Worker for The Chord Book (adapted from House Index v1.9.2 sw.js)
-// - Network-first app shell (4 s timeout), fallback to SHELL_CACHE
+// - Network-first page (4 s timeout) and app files (no timeout; saved copy only when offline)
 // - Per-user Supabase REST cache that never caches anonymous reads and wipes on user switch/sign-out
 // - Pre-caches self-hosted fonts and ES modules so the app works offline at a gig
 
-const VERSION = "cb-v0.5.3";
+const VERSION = "cb-v0.5.4";
 const SHELL_CACHE = `${VERSION}-shell`;
 const DATA_CACHE = `${VERSION}-data`;
 const META_KEY = "https://chordbook.local/__meta/owner";
@@ -17,6 +17,7 @@ const SHELL_FILES = [
   "config.js",
   "manifest.json",
   "vendor/supabase-2.118.0.min.js",
+  "js/boot-guard.js",
   "js/core.js",
   "js/device.js",
   "js/chords.js",
@@ -39,7 +40,10 @@ const SHELL_FILES = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL_FILES)).then(() => self.skipWaiting())
+    // "reload" skips the browser's own HTTP cache, so this release's files are cached together.
+    caches.open(SHELL_CACHE)
+      .then((cache) => cache.addAll(SHELL_FILES.map((url) => new Request(url, { cache: "reload" }))))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -123,22 +127,34 @@ async function handleData(event) {
   return cached || network;
 }
 
+// The page itself: network first, but after a few seconds use the saved copy so the app opens
+// at a gig with no signal. App files (scripts, styles): wait for the network and use the saved
+// copy only when offline. Mixing a slow network's files with saved ones from another release
+// can break the app, so they never race.
 async function handleShell(event) {
   const { request } = event;
-  const network = fetch(request).then((response) => {
+  const isPage = request.mode === "navigate";
+  const network = fetch(request, { cache: "no-cache" }).then((response) => {
     if (response.ok && response.type === "basic") {
       const copy = response.clone();
       event.waitUntil(caches.open(SHELL_CACHE).then((c) => c.put(request, copy)));
     }
     return response;
   });
+  const cache = await caches.open(SHELL_CACHE);
+  const saved = async () =>
+    (await cache.match(request, { ignoreSearch: isPage })) ||
+    (isPage ? await cache.match("index.html") : undefined);
+  if (!isPage) {
+    try {
+      return await network;
+    } catch {
+      return (await saved()) || Response.error();
+    }
+  }
   const fast = await networkWithin(SHELL_TIMEOUT_MS, network);
   if (fast) return fast;
-  const cache = await caches.open(SHELL_CACHE);
-  const cached =
-    (await cache.match(request, { ignoreSearch: request.mode === "navigate" })) ||
-    (request.mode === "navigate" ? await cache.match("index.html") : undefined);
-  return cached || network;
+  return (await saved()) || network;
 }
 
 async function handleFont(event) {

@@ -512,6 +512,8 @@ export function renderLibrarySidebar() {
 // Boot & Auth Initialization
 // ============================================================================
 async function bootApp() {
+  // The boot guard (js/boot-guard.js) offers a fresh reload if this never runs.
+  window.__cbBooted = true;
   const verEl = document.getElementById("app-version-pill");
   if (verEl) verEl.textContent = `v${APP_VERSION}`;
 
