@@ -56,6 +56,11 @@ def main():
           all(f in src for f in ('genre:', 'tuning:', 'form:', 'tempo:')) and '"chorus_repeat"' in src)
     check("A repeated chorus may have no lines", 'sec.type === "chorus_repeat") continue' in src)
     check("No real lyrics in the prompt (made-up examples only)", "Rivers run" in src and "slit" not in src)
+    check("Puts chords back where the source has them before checking",
+          "// ==== LAYOUT ====" in src and src.count("realignToLayout(attempt.toolInput.sections, layout, isValidChordToken)") == 2
+          and "pdfLayoutLines(bytes)" in src and "snapLayoutLine(l)" in src)
+    check("Retries once when the AI is busy", "[429, 500, 502, 503, 529].includes(res.status)" in src and '"BUSY"' in src)
+    check("Accepts A2 and Asus4-style chord names", "|6\\/9|69|6|5|4|2)?" in src)
     check("Uses SSRF safety helpers (parseAllowedUrl, resolvesPublic, readCapped)",
           "parseAllowedUrl(" in src and "resolvesPublic(" in src and "readCapped(" in src)
     check("Supports text, multi-snip image, PDF document, and url modes",

@@ -574,6 +574,14 @@ export function mergeChordAndLyricLines(chordLine, lyricLine) {
   return result.replace(/\s+$/, "");
 }
 
+// "Til the Right One Comes Tabs and Chords" -> "Til the Right One Comes"
+function cleanSongTitle(text) {
+  return String(text || "")
+    .replace(/\s*[|·]\s*[^|·]*$/, "")
+    .replace(/\s+(?:(?:chords?|tabs?|lyrics)\s+(?:and|&)\s+)?(?:chords?|tabs?|lyrics|ver(?:sion)?\s*\d+)$/i, "")
+    .trim();
+}
+
 /**
  * Import standard multi-line "chords over lyrics" plain text into ChordPro.
  */
@@ -612,11 +620,25 @@ export function fromChordsOverLyrics(text) {
     if (!meta.title && !parseStandaloneSectionHeader(l) && !isChordLine(l) && !l.startsWith("{")) {
       const dashParts = l.split(/\s+[-–—]\s+|\s+by\s+/i);
       if (dashParts.length === 2 && dashParts[0].length < 60 && dashParts[1].length < 50) {
-        meta.title = dashParts[0].replace(/\s+chords$/i, "").trim();
+        meta.title = cleanSongTitle(dashParts[0]);
         meta.artist = dashParts[1].trim();
         idx++;
         continue;
       }
+    }
+    // A plain first line above the chords is the title; a short line under it is the artist.
+    const looksLikeText = (t) => t && t.length < 60 && !parseStandaloneSectionHeader(t) && !isChordLine(t) &&
+      !t.startsWith("{") && !t.startsWith("(") && !/^[eBGDAE][|:]/.test(t);
+    if (!meta.title && looksLikeText(l)) {
+      meta.title = cleanSongTitle(l);
+      idx++;
+      const next = (lines[idx] || "").trim();
+      const after = (lines[idx + 1] || "").trim();
+      if (looksLikeText(next) && next.length < 40 && (!after || parseStandaloneSectionHeader(after) || isChordLine(after))) {
+        meta.artist = next;
+        idx++;
+      }
+      continue;
     }
     if (l.startsWith("(") && l.endsWith(")") && idx < 6) {
       meta.note = l.slice(1, -1).trim();
@@ -1415,7 +1437,8 @@ export function smartImportText(text) {
 
   // 3. Check if it's a collapsed ugly paste (few lines, inline [Intro]/[Verse]/[Chorus], or long lines mixing chords and lyrics)
   const nonEmptyLines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const hasInlineSections = /\[(Intro|Verse|Chorus|Bridge)\]\s+[A-G]/i.test(raw);
+  // Only a header followed by chords on the same line; a header on its own line is a normal sheet.
+  const hasInlineSections = /\[(Intro|Verse|Chorus|Bridge)\][ \t]+[A-G]/i.test(raw);
   const avgLineLen = raw.length / Math.max(1, nonEmptyLines.length);
 
   if (hasInlineSections || (nonEmptyLines.length <= 4 && avgLineLen > 120)) {

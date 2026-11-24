@@ -104,6 +104,32 @@ def sign_in(url, key, email, password):
     return data["access_token"]
 
 
+CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+
+def app_layout(text):
+    """What the app sends with a paste: its column-exact lines (js/ai.js does the same)."""
+    def inline(path):
+        code = path.read_text()
+        code = re.sub(r"^\s*import\s+[\s\S]*?from\s+['\"].*?['\"];\s*$", "", code, flags=re.M)
+        return re.sub(r"\bexport\s+(const|let|var|function|class|async function)\b", r"\1", code)
+    js = inline(ROOT / "js" / "chords.js") + "\n" + inline(ROOT / "js" / "chordpro.js")
+    page = f"""<!doctype html><meta charset=utf-8><pre id=out></pre><script>{js}
+const d = smartImportText({json.dumps(text.strip())});
+const lines = ["chords_over_lyrics", "split_lines"].includes(d.format)
+  ? d.chordpro.split("\\n").filter((l) => l.includes("[") && !l.trim().startsWith("{{")) : [];
+document.getElementById("out").textContent = JSON.stringify(lines);
+</script>"""
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "layout.html"
+        f.write_text(page)
+        dom = subprocess.run([CHROME, "--headless=new", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=2000",
+                              "--dump-dom", f.as_uri()], capture_output=True, text=True, timeout=60).stdout
+    m = re.search(r'<pre id="out">(.*?)</pre>', dom, re.S)
+    import html as _html
+    return json.loads(_html.unescape(m.group(1))) if m else []
+
+
 def image_payload(path):
     """Same downscale as the app: longest side 1600px, JPEG."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -123,7 +149,11 @@ def request_body(kind, inputs):
         return {"type": "pdf", "pdfData": base64.b64encode(data).decode(), "fileName": Path(inputs).name}, f"{len(data)//1024} KB PDF"
     if kind == "text":
         text = (TEST_DIR / inputs).read_text()
-        return {"type": "text", "text": text}, f"{len(text)} chars"
+        body = {"type": "text", "text": text}
+        layout = app_layout(text)
+        if layout:
+            body["layout"] = layout
+        return body, f"{len(text)} chars" + (f", {len(layout)} layout lines" if layout else "")
     return {"type": "url", "url": inputs}, inputs
 
 

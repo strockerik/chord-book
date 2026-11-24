@@ -83,8 +83,14 @@ export function initImportModal({ onImportReady, onImportMany }) {
         await runEdgeImport({ body: { type: "url", url: raw, note }, btn: formatBtn, defaultLabel: "Format song", onImportReady });
         return;
       }
+      // Chords-over-lyrics and phone copies record exact chord columns. Send those lines so the
+      // server can put every chord back where the source had it after the AI organizes the song.
+      const draft = smartImportText(raw);
+      const layout = ["chords_over_lyrics", "split_lines"].includes(draft.format)
+        ? draft.chordpro.split("\n").filter((l) => l.includes("[") && !l.trim().startsWith("{"))
+        : undefined;
       const ok = await runEdgeImport({
-        body: { type: "text", text: raw, note },
+        body: { type: "text", text: raw, note, layout },
         btn: formatBtn,
         defaultLabel: "Format song",
         onImportReady,
