@@ -1223,6 +1223,10 @@ button, input, select, textarea {
 .chord-cell.is-empty {
   visibility: hidden;
   pointer-events: none;
+  /* Holds the chord row's height only; a placeholder wider than a short word like "I"
+     would push the next word away. */
+  width: 0;
+  overflow: visible;
 }
 .lyric-cell {
   white-space: pre;

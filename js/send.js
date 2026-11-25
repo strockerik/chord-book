@@ -667,7 +667,7 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
     border: none;
     text-align: left;
   }
-  .chord-cell.is-empty { visibility: hidden; }
+  .chord-cell.is-empty { visibility: hidden; width: 0; overflow: visible; }
   .lyric-cell { white-space: pre; line-height: 1.14; }
   .sheet-page.is-wrap-lines .lyric-line { flex-wrap: wrap; }
   .lyric-cell.has-word-break { display: flex; align-self: stretch; }

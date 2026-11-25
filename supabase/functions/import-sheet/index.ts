@@ -556,6 +556,44 @@ function applyPlacementNotes(sections: any[]): number {
   return fixed;
 }
 
+// Some sources write a repeat out in full (the same lines again, back to back). Print it once
+// with a count, so the sheet stays short: "Bridge (2x)", or a "Repeat 4x" line after the block.
+// deno-lint-ignore no-explicit-any
+function collapseWrittenRepeats(sections: any[]) {
+  const same = (a: { text?: string }, b: { text?: string }) =>
+    typeof a?.text === "string" && typeof b?.text === "string" && a.text.trim() === b.text.trim() && a.text.trim() !== "";
+  for (const sec of sections || []) {
+    const lines = Array.isArray(sec.lines) ? sec.lines : [];
+    if (sec.type === "tab" || lines.length < 2) continue;
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      let best = { size: 0, times: 1 };
+      for (let size = Math.floor((lines.length - i) / 2); size >= 1; size--) {
+        let times = 1;
+        while (i + (times + 1) * size <= lines.length &&
+          lines.slice(i, i + size).every((l: { text?: string }, k: number) => same(l, lines[i + times * size + k]))) times++;
+        // Same coverage: the smaller block reads simpler ("3 lines, 4x" beats "6 lines, 2x").
+        if (times > 1 && size * times >= best.size * best.times) best = { size, times };
+      }
+      if (best.times > 1) {
+        out.push(...lines.slice(i, i + best.size));
+        const wholeSection = i === 0 && best.size * best.times === lines.length;
+        if (wholeSection && !/\(\d+x\)/.test(sec.label || "")) {
+          sec.label = `${sec.label || ""} (${best.times}x)`.trim();
+        } else if (!wholeSection) {
+          out.push({ text: `(Repeat ${best.times}x)`, tab: false });
+        }
+        i += best.size * best.times;
+      } else {
+        out.push(lines[i]);
+        i++;
+      }
+    }
+    sec.lines = out;
+  }
+}
+
 // Chord voicing charts at the top of a page aren't part of the song.
 const NOT_SONG_SECTION = /chord (?:shapes?|diagrams?|charts?|voicings?)|voicings?|fingerings?/i;
 
@@ -1067,6 +1105,7 @@ Deno.serve(async (req: Request) => {
         ? layoutFromSourceText(sheet.source_text, isValidChordToken)
         : []);
     if (exact.length) realignToLayout(sheet.sections, exact, isValidChordToken);
+    collapseWrittenRepeats(sheet.sections);
     delete sheet.source_text;
     delete sheet.monospaced;
   }
