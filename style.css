@@ -2022,6 +2022,8 @@ body[data-device="phone"] .toast-bar {
 .song-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .toolbar-key, .toolbar-capo, .toolbar-actions { display: inline-flex; align-items: center; gap: 4px; }
 .toolbar-capo { gap: 8px; }
+.tabs-toggle-btn { min-height: 44px; white-space: nowrap; }
+.tabs-toggle-btn.is-active { background: var(--paper-soft); }
 .toolbar-actions { gap: 6px; margin-left: auto; }
 .key-select { min-width: 68px; font-size: 1rem; }
 .reset-key-btn {

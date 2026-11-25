@@ -367,6 +367,8 @@ export function renderSongBodyHTML(songRow, viewOpts = {}) {
   const accidentalPref = viewOpts.accidentalPref || songRow.layout_prefs?.accidental_pref || "auto";
   const targetKey = transposeKey(baseKey, semitoneDelta, accidentalPref);
   const compactChorus = viewOpts.compactChorus ?? (songRow.layout_prefs?.compact_chorus || false);
+  // "Hide tabs" leaves out guitar tab (riffs, solos) and keeps the chords and words.
+  const hideTabs = viewOpts.hideTabs ?? (songRow.layout_prefs?.hide_tabs || false);
   const sidebarNotesMap = songRow.layout_prefs?.sidebar_notes || {};
 
   // Choruses are written out every time they're sung. "Hide repeated choruses" (or the
@@ -381,7 +383,15 @@ export function renderSongBodyHTML(songRow, viewOpts = {}) {
     lines: [{ comment: "Repeat Chorus" }]
   });
 
-  parsed.sections.forEach((sec, idx) => {
+  parsed.sections.forEach((original, idx) => {
+    let sec = original;
+    if (hideTabs) {
+      if (sec.type === "tab") return;
+      if ((sec.lines || []).some((l) => l.tab !== undefined)) {
+        sec = { ...sec, lines: sec.lines.filter((l) => l.tab === undefined) };
+        if (!sec.lines.length) return;
+      }
+    }
     if (sec.type === "chorus_repeat") {
       if (!sec.lines?.length) return;
       sectionsToRender.push({ origIdx: idx, sec: compactChorus ? shortRepeat(sec) : sec });

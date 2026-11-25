@@ -144,6 +144,13 @@ export function initSongController({ onSaveSong, onDeleteSong, getLibrarySongs }
     refreshSongView();
   });
 
+  // Hide tabs (toolbar, shown only for songs with tab)
+  document.getElementById("toggle-tabs-btn")?.addEventListener("click", () => {
+    viewState.hideTabs = !viewState.hideTabs;
+    viewState.isDirty = true;
+    refreshSongView();
+  });
+
   // Compact Choruses checkbox
   document.getElementById("compact-chorus-toggle")?.addEventListener("change", (e) => {
     viewState.compactChorus = !!e.target.checked;
@@ -483,6 +490,7 @@ export function openSongView(song, { discardPending = false } = {}) {
     pageMode: defaultMode,
     columns: prefs.columns || "auto",
     compactChorus: !!prefs.compact_chorus,
+    hideTabs: !!prefs.hide_tabs,
     showDiagrams: prefs.show_diagrams === true,
     fontOffset: Number(prefs.font_offset || 0),
     accidentalPref: prefs.accidental_pref || "auto",
@@ -527,6 +535,7 @@ export function refreshSongView() {
       page_mode: viewState.pageMode,
       columns: viewState.columns,
       compact_chorus: viewState.compactChorus,
+      hide_tabs: viewState.hideTabs,
       show_diagrams: viewState.showDiagrams,
       font_offset: viewState.fontOffset,
       accidental_pref: viewState.accidentalPref,
@@ -588,6 +597,15 @@ function refreshSongToolbar(fitInfo = null) {
 
   const colSelect = document.getElementById("columns-select");
   if (colSelect) colSelect.value = String(viewState.columns);
+
+  const tabsBtn = document.getElementById("toggle-tabs-btn");
+  if (tabsBtn) {
+    const hasTab = /\{\s*(start_of_tab|sot)\b/i.test(activeSong.chordpro || "") || /^\s*[eBGDAE]\s*[|:][-\d]/m.test(activeSong.chordpro || "");
+    tabsBtn.hidden = !hasTab;
+    tabsBtn.textContent = viewState.hideTabs ? "Show tabs" : "Hide tabs";
+    tabsBtn.setAttribute("aria-pressed", viewState.hideTabs ? "true" : "false");
+    tabsBtn.classList.toggle("is-active", !!viewState.hideTabs);
+  }
 
   const compactToggle = document.getElementById("compact-chorus-toggle");
   if (compactToggle) compactToggle.checked = !!viewState.compactChorus;
@@ -765,6 +783,7 @@ function buildSongWithCurrentSettings() {
     ...prevPrefs,
     columns: viewState.columns,
     compact_chorus: viewState.compactChorus,
+    hide_tabs: viewState.hideTabs,
     show_diagrams: viewState.showDiagrams,
     font_offset: viewState.fontOffset,
     accidental_pref: viewState.accidentalPref,

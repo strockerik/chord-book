@@ -245,8 +245,8 @@ export function fitLadder({ targetPt, minPt, columnChoices, setType, setLayout, 
 }
 
 /**
- * Sizes tab so the widest tab block fills the page width (8pt to 15pt), so tab reads as large as
- * the page allows. Every tab block in the song gets that one size, so the sheet stays consistent.
+ * Sizes tab so the widest tab block fills the page width, between 7.5pt and 10pt (a little under
+ * the 11pt lyrics, so it never dominates the sheet). Every tab block in the song gets that one size, so the sheet stays consistent.
  */
 export function fitTabsToWidth(pages) {
   const blocks = pages.flatMap((p) => Array.from(p.querySelectorAll(".tab-block")));
@@ -262,7 +262,7 @@ export function fitTabsToWidth(pages) {
     if (available > 0 && used > 0) best = Math.min(best, parseFloat(style.fontSize) * (available / used) * 0.98);
   }
   if (!Number.isFinite(best)) return;
-  const px = `${Math.max(8 * 4 / 3, Math.min(15 * 4 / 3, best)).toFixed(2)}px`;
+  const px = `${Math.max(7.5 * 4 / 3, Math.min(10 * 4 / 3, best)).toFixed(2)}px`;
   for (const pre of blocks) pre.style.fontSize = px;
 }
 

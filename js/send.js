@@ -291,6 +291,7 @@ export function buildSetlistPrintableHTML(setlist, itemsWithSongs, exportOpts = 
       semitoneDelta,
       accidentalPref: prefs.accidental_pref || "auto",
       compactChorus: compactChorus || !!prefs.compact_chorus,
+      hideTabs: !!prefs.hide_tabs,
       editableNotes: false
     });
     const { parsed, targetKey, distinctChords, sectionsToRender, renderSection } = bodyModel;
@@ -932,7 +933,7 @@ function fitPrintPages(doc, ladder, collapse, targetPt, minPt) {
           if (available > 0 && used > 0) best = Math.min(best, parseFloat(style.fontSize) * (available / used) * 0.98);
         }
         if (!Number.isFinite(best)) return;
-        const px = Math.max(8 * 4 / 3, Math.min(15 * 4 / 3, best)).toFixed(2) + "px";
+        const px = Math.max(7.5 * 4 / 3, Math.min(10 * 4 / 3, best)).toFixed(2) + "px";
         for (const pre of blocks) pre.style.fontSize = px;
       };
       for (const option of options) {
