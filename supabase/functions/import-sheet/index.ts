@@ -392,6 +392,19 @@ const wordsKey = (line: string) =>
   line.replace(/\[[^\]]*\]/g, "").toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9']+/g, " ").trim();
 const chordList = (line: string) => [...line.matchAll(/\[([^\]]+)\]/g)].map((m) => m[1].trim());
 
+// "[G]Down the [D]river in the morning" split after 3 words -> ["[G]Down the [D]river", "in the morning"].
+function splitAtWord(text: string, words: number): [string, string] {
+  let count = 0;
+  let inWord = false;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "[") { const close = text.indexOf("]", i); if (close > i) { i = close; continue; } }
+    const letter = /[A-Za-z0-9']/.test(text[i]);
+    if (letter && !inWord) { inWord = true; count++; if (count === words + 1) return [text.slice(0, i).trim(), text.slice(i).trim()]; }
+    if (!letter && text[i] !== "[") inWord = letter;
+  }
+  return [text, ""];
+}
+
 /**
  * Replaces the AI's chord placement with the exact one from the source wherever both have the
  * same words and the same number of chords. Returns how many lines changed.
@@ -412,28 +425,65 @@ function realignToLayout(
   // The same words can come back with different chords ("Boys like you…" over Bm, then over G),
   // so each source line is used once, in order.
   const used = new Map<string, number>();
+  const take = (key: string, chordCount: number | null): string | null => {
+    const candidates = byWords.get(key);
+    if (!candidates) return null;
+    let next = used.get(key) ?? 0;
+    while (next < candidates.length && chordCount !== null && chordList(candidates[next]).length !== chordCount) next++;
+    // A chorus printed once but sung again in the source: start over at its first copy.
+    if (next >= candidates.length) {
+      next = candidates.findIndex((c) => chordCount === null || chordList(c).length === chordCount);
+      if (next < 0) return null;
+    }
+    used.set(key, next + 1);
+    return candidates[next];
+  };
+  // Source lines in order, for lines the AI joined or split.
+  const ordered = layout.filter((l) => chordList(l).length && chordList(l).every(isValidChord)).map((l) => ({ text: l, key: wordsKey(l) }));
   let changed = 0;
   for (const sec of sections || []) {
-    if (sec.type === "chorus_repeat") continue;
-    for (const line of sec.lines || []) {
-      if (line.tab || typeof line.text !== "string") continue;
+    if (sec.type === "chorus_repeat" || !Array.isArray(sec.lines)) continue;
+    const out: Array<{ text?: string; tab?: boolean }> = [];
+    for (let i = 0; i < sec.lines.length; i++) {
+      const line = sec.lines[i];
+      if (line.tab || typeof line.text !== "string") { out.push(line); continue; }
       const key = wordsKey(line.text);
-      const candidates = byWords.get(key);
-      if (!candidates) continue;
-      const mine = chordList(line.text);
-      let next = used.get(key) ?? 0;
-      while (next < candidates.length && chordList(candidates[next]).length !== mine.length) next++;
-      // A chorus printed once but sung again in the source: start over at its first copy.
-      if (next >= candidates.length) {
-        next = candidates.findIndex((c) => chordList(c).length === mine.length);
-        if (next < 0) continue;
+      const exact = take(key, chordList(line.text).length);
+      if (exact) {
+        if (exact !== line.text) changed++;
+        out.push({ ...line, text: exact });
+        continue;
       }
-      used.set(key, next + 1);
-      if (candidates[next] !== line.text) {
-        line.text = candidates[next];
+      // The AI joined two or three source lines into one: put the source lines back.
+      let joined: string[] | null = null;
+      for (let a = 0; a < ordered.length && !joined; a++) {
+        for (let n = 2; n <= 3 && a + n <= ordered.length; n++) {
+          const parts = ordered.slice(a, a + n);
+          if (parts.map((p) => p.key).join(" ") === key) { joined = parts.map((p) => p.text); break; }
+        }
+      }
+      if (joined) {
+        joined.forEach((t) => out.push({ ...line, text: t }));
         changed++;
+        continue;
       }
+      // The AI split one source line in two: split the source line at the same word.
+      const nextLine = sec.lines[i + 1];
+      const nextText = nextLine && !nextLine.tab && typeof nextLine.text === "string" ? nextLine.text : null;
+      if (nextLine && nextText !== null) {
+        const firstWords = key.split(" ").length;
+        const whole = ordered.find((o) => o.key === `${key} ${wordsKey(nextText)}`);
+        if (whole) {
+          const [head, tail] = splitAtWord(whole.text, firstWords);
+          out.push({ ...line, text: head }, { ...nextLine, text: tail });
+          i++;
+          changed++;
+          continue;
+        }
+      }
+      out.push(line);
     }
+    sec.lines = out;
   }
   return changed;
 }
