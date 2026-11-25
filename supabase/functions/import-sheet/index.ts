@@ -978,7 +978,11 @@ Deno.serve(async (req: Request) => {
       type: "text",
       text: (note ? `User note: ${note}\n\n` : "") + `Extract the chord sheet from this page (${url.hostname}):\n\n${pageText}`
     });
-    withSource = true;
+    // Chord sites lay sheets out as fixed-width chords over lyrics, so the page's own text gives
+    // exact chord columns. Only when it doesn't does the AI copy the sheet out.
+    layout = layoutFromSourceText(pageText, isValidChordToken);
+    withSource = layout.length < 3;
+    if (withSource) layout = [];
     model = MODEL_TEXT;
   } else {
     return json({ error: "Unsupported import type." });

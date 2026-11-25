@@ -65,6 +65,7 @@ CASES = [
     ("text-jm-til-the-right-one", "John Mayer Chords copy, chords over lyrics", "text", "Other Sources/Til the Right One Comes - John Mayer Chords copy.txt", []),
     ("text-jm-gravity", "John Mayer Chords copy, mostly guitar tab", "text", "Other Sources/Gravity - John Mayer Chords copy.txt", []),
     ("text-davetabs-crash", "DaveTabs copy, tab only with no chords or lyrics", "text", "Other Sources/Crash Into Me - DaveTabs copy.txt", []),
+    ("link-ug-so-last-summer", "Link: the Ultimate Guitar page the screen grabs came from", "url", "https://tabs.ultimate-guitar.com/tab/taking-back-sunday/youre-so-last-summer-chords-668210", []),
     ("link-hymnal-amazing-grace", "Link: hymnal.net page with chords", "url", "https://www.hymnal.net/en/hymn/h/313", []),
     ("link-jm-split-screen", "Link: John Mayer Chords page", "url", "https://johnmayerchords.com/albums/Heavier%20Things/Split%20Screen%20Sadness/Studio", []),
 ]
