@@ -116,8 +116,8 @@ export function renderAndFitSong(containerEl, songRow, viewOpts = {}) {
 
   let pageBuckets = [];
   let fitResult = null;
-  for (let count = minPages; count <= maxPages; count++) {
-    pageBuckets = splitSectionsIntoPages(sectionsToRender, count);
+  const tryLayout = (buckets) => {
+    pageBuckets = buckets;
     containerEl.innerHTML = `
       <div class="sheets-deck" id="sheets-deck">
         ${pageBuckets.map((bucket, pIdx) => `
@@ -140,7 +140,14 @@ export function renderAndFitSong(containerEl, songRow, viewOpts = {}) {
       // Redraw once after web fonts load; a song that still can't fit must not redraw forever.
       onOverflow: viewOpts.refitAfterFonts ? null : () => renderAndFitSong(containerEl, songRow, { ...viewOpts, refitAfterFonts: true })
     });
-    if (fitResult.fits) break;
+    return fitResult.fits;
+  };
+  // Before adding a page, try other page breaks: counting by lines can overload one page (a
+  // repeated chorus counts in full but may print as "Repeat Chorus").
+  outer: for (let count = minPages; count <= maxPages; count++) {
+    for (const buckets of pageBreakOptions(sectionsToRender, count)) {
+      if (tryLayout(buckets)) break outer;
+    }
   }
 
   scaleLetterPagesToViewport(containerEl);
@@ -149,6 +156,19 @@ export function renderAndFitSong(containerEl, songRow, viewOpts = {}) {
     pages: pageBuckets.length,
     ...fitResult
   };
+}
+
+/** The balanced split first, then for two pages every other break, closest to balanced first. */
+function pageBreakOptions(sections, count) {
+  const first = splitSectionsIntoPages(sections, count);
+  if (count !== 2 || sections.length < 3) return [first];
+  const firstBreak = first[0].length;
+  const others = [];
+  for (let b = 1; b < sections.length; b++) {
+    if (b !== firstBreak) others.push(b);
+  }
+  others.sort((a, c) => Math.abs(a - firstBreak) - Math.abs(c - firstBreak));
+  return [first, ...others.slice(0, 4).map((b) => [sections.slice(0, b), sections.slice(b)])];
 }
 
 /** Divides whole sections across pages by approximate length. */
@@ -336,9 +356,7 @@ export function autoFitLetterPages(pageEls, { columnsPref = "auto", fontOffset =
     return true;
   };
 
-  // Tab is for learning a part, not for singing along: it gets the full page width, never a column.
-  const hasTab = pageEls.some((p) => p.querySelector(".tab-block"));
-  const columnChoices = hasTab || columnsPref === 1 || columnsPref === "1"
+  const columnChoices = columnsPref === 1 || columnsPref === "1"
     ? [1]
     : (columnsPref === 2 || columnsPref === "2" ? [2] : [1, 2]);
   // A− / A+ on a song moves it off the standard on purpose.

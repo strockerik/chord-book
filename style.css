@@ -995,6 +995,11 @@ button, input, select, textarea {
   padding-bottom: var(--sheet-section-gap, 10px);
   grid-template-columns: 1fr;
 }
+/* Tab is for learning a part, not for singing along: it always spans the full page width,
+   even when the verses and choruses around it are set in two columns. */
+.sheet-page.is-two-col .song-section.type-tab {
+  column-span: all;
+}
 /* The fit marks the section that ends each column; it needs no gap below it. */
 .sheet-page.is-two-col .song-section.is-column-end {
   padding-bottom: 0;

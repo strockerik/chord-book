@@ -92,6 +92,9 @@ for (const ch of ["C", "G", "G/B", "Dsus4", "D", "D/E", "Em", "Am7", "Em7", "D/F
 assert("half step down: G shapes sound in F#", soundingKeyWithTuning("G", 0, "Eb Ab Db Gb Bb Eb") === "F#", soundingKeyWithTuning("G", 0, "Eb Ab Db Gb Bb Eb"));
 assert("half step down + capo 1 sounds in the written key", soundingKeyWithTuning("G", 1, "Eb Ab Db Gb Bb Eb") === "G");
 assert("drop D keeps the key", soundingKeyWithTuning("D", 0, "D A D G B E") === "D" && getTuning("D A D G B E").id === "drop_d");
+assert("minor keys stay put and move by pitch", transposeKey("Am", 0) === "Am" && transposeKey("Am", 3) === "Cm" && transposeKey("Em", 2) === "F#m" && transposeKey("C#m", -1) === "Cm",
+  [transposeKey("Am", 0), transposeKey("Am", 3), transposeKey("Em", 2), transposeKey("C#m", -1)].join(","));
+assert("a minor song with a capo sounds in the right key", soundingKeyWithTuning("Am", 3, "E A D G B E") === "Cm", soundingKeyWithTuning("Am", 3, "E A D G B E"));
 assert("standard and custom tunings are recognized", getTuning("E A D G B E").id === "standard" && getTuning("DADGAD").display === "DADGAD");
 
 // 8. Key center grouping for vocal analytics

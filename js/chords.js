@@ -26,7 +26,8 @@ export const FLAT_KEYS = new Set([
 ]);
 
 export const ALL_MAJOR_KEYS = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
-export const ALL_MINOR_KEYS = ["Am", "Bbm", "Bm", "Cm", "C#m", "Dm", "Ebm", "Em", "Fm", "F#m", "Gm", "G#m"];
+// Indexed by pitch (C = 0), like ALL_MAJOR_KEYS.
+export const ALL_MINOR_KEYS = ["Cm", "C#m", "Dm", "Ebm", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"];
 
 // Open chord shapes comfortable for acoustic/electric guitar without full barres
 export const EASY_OPEN_CHORDS = new Set([

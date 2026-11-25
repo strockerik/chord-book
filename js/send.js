@@ -836,29 +836,48 @@ function fitPrintPages(doc, ladder, collapse, targetPt, minPt) {
         pageSections.forEach((section) => flow.appendChild(section));
         return;
       }
-      const grid = doc.createElement("div");
-      const left = doc.createElement("div");
-      const right = doc.createElement("div");
-      grid.className = "two-col-grid";
-      left.className = "two-col-left";
-      right.className = "two-col-right";
-      grid.append(left, right);
-      flow.appendChild(grid);
-      pageSections.forEach((section) => left.appendChild(section));
-      const heights = pageSections.map((section) => section.getBoundingClientRect().height);
-      const total = heights.reduce((sum, height) => sum + height, 0);
-      let running = 0;
-      let bestSplit = 1;
-      let bestTallest = Infinity;
-      for (let i = 0; i < pageSections.length - 1; i++) {
-        running += heights[i];
-        const tallest = Math.max(running, total - running);
-        if (tallest < bestTallest) {
-          bestTallest = tallest;
-          bestSplit = i + 1;
+      // Two balanced columns, except tab: it is for learning a part, so it always runs the full
+      // page width, and the sections before and after it get their own pair of columns.
+      const twoColumns = (run) => {
+        if (run.length < 2) {
+          run.forEach((section) => flow.appendChild(section));
+          return;
+        }
+        const grid = doc.createElement("div");
+        const left = doc.createElement("div");
+        const right = doc.createElement("div");
+        grid.className = "two-col-grid";
+        left.className = "two-col-left";
+        right.className = "two-col-right";
+        grid.append(left, right);
+        flow.appendChild(grid);
+        run.forEach((section) => left.appendChild(section));
+        const heights = run.map((section) => section.getBoundingClientRect().height);
+        const total = heights.reduce((sum, height) => sum + height, 0);
+        let running = 0;
+        let bestSplit = 1;
+        let bestTallest = Infinity;
+        for (let i = 0; i < run.length - 1; i++) {
+          running += heights[i];
+          const tallest = Math.max(running, total - running);
+          if (tallest < bestTallest) {
+            bestTallest = tallest;
+            bestSplit = i + 1;
+          }
+        }
+        run.slice(bestSplit).forEach((section) => right.appendChild(section));
+      };
+      let run = [];
+      for (const section of pageSections) {
+        if (section.classList.contains("type-tab")) {
+          twoColumns(run);
+          run = [];
+          flow.appendChild(section);
+        } else {
+          run.push(section);
         }
       }
-      pageSections.slice(bestSplit).forEach((section) => right.appendChild(section));
+      twoColumns(run);
     };
 
     const pageFits = (page) => {
@@ -882,7 +901,17 @@ function fitPrintPages(doc, ladder, collapse, targetPt, minPt) {
         group[group.length - 1].after(extra);
         group.push(extra);
       }
-      const buckets = splitForPages(count);
+      // Before adding a page, try other page breaks (a repeated chorus counts in full but may
+      // print as "Repeat Chorus", so the balanced split can overload one page).
+      const options = [splitForPages(count)];
+      if (count === 2 && sections.length > 2) {
+        const first = options[0][0].length;
+        const breaks = [];
+        for (let b = 1; b < sections.length; b++) if (b !== first) breaks.push(b);
+        breaks.sort((a, c) => Math.abs(a - first) - Math.abs(c - first));
+        breaks.slice(0, 4).forEach((b) => options.push([sections.slice(0, b), sections.slice(b)]));
+      }
+      let buckets = options[0];
       group.forEach((page, i) => {
         page.classList.toggle("is-continued", i > 0);
         const pill = page.querySelector(".page-pill");
@@ -891,8 +920,6 @@ function fitPrintPages(doc, ladder, collapse, targetPt, minPt) {
           pill.querySelector("strong").textContent = (i + 1) + "/" + group.length;
         }
       });
-      // Tab gets the full page width, never a column, sized so its longest line fills it.
-      const hasTab = group.some((page) => page.querySelector(".tab-block"));
       // One size for every tab block in the song: the widest block fills the page width.
       const sizeTabs = () => {
         const blocks = group.flatMap((page) => Array.from(page.querySelectorAll(".tab-block")));
@@ -908,10 +935,12 @@ function fitPrintPages(doc, ladder, collapse, targetPt, minPt) {
         const px = Math.max(8 * 4 / 3, Math.min(15 * 4 / 3, best)).toFixed(2) + "px";
         for (const pre of blocks) pre.style.fontSize = px;
       };
+      for (const option of options) {
+      buckets = option;
       result = ladder({
         targetPt,
         minPt,
-        columnChoices: hasTab ? [1] : [1, 2],
+        columnChoices: [1, 2],
         setType: (pt, spacing) => {
           for (const page of group) {
             page.style.setProperty("--sheet-font-size", pt.toFixed(2) + "pt");
@@ -924,6 +953,8 @@ function fitPrintPages(doc, ladder, collapse, targetPt, minPt) {
         fits: () => { sizeTabs(); return group.every(pageFits); },
         collapseRepeats: () => collapse(group)
       });
+      if (result.fits) break;
+      }
       if (result.fits) break;
     }
     group.forEach((page) => {
