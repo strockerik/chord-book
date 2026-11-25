@@ -1664,6 +1664,7 @@ button, input, select, textarea {
   align-items: center;
   gap: 6px;
 }
+.fit-badge.is-bad-fit { background: #fef2f2; color: #991b1b; }
 .fit-badge {
   font-size: 0.75rem;
   background: var(--chip);
@@ -2024,6 +2025,9 @@ body[data-device="phone"] .toast-bar {
 .toolbar-capo { gap: 8px; }
 .tabs-toggle-btn { min-height: 44px; white-space: nowrap; }
 .tabs-toggle-btn.is-active { background: var(--paper-soft); }
+.tabs-toggle-btn .label-short { display: none; }
+/* A count beside a chord-only line: "D  G  ×2" */
+.repeat-mark { align-self: flex-end; margin-left: 0.4em; font-weight: 700; color: var(--faint, #6b7280); font-size: 0.9em; }
 .toolbar-actions { gap: 6px; margin-left: auto; }
 .key-select { min-width: 68px; font-size: 1rem; }
 .reset-key-btn {
@@ -2172,6 +2176,15 @@ body.no-cloud .needs-cloud { display: none !important; }
   .key-select { width: 62px; min-width: 62px; padding-inline: 6px; }
   .toolbar-capo .small-select { padding-inline: 6px; }
   .sounding-pill { display: none; }
+  /* Short label keeps the toolbar on one row; struck through while tab is hidden */
+  .song-toolbar { gap: 6px; }
+  .toolbar-capo { gap: 4px; }
+  .tabs-toggle-btn { padding-inline: 10px; }
+  .tabs-toggle-btn .label-long { display: none; }
+  .tabs-toggle-btn .label-short { display: inline; }
+  .tabs-toggle-btn.is-active .label-short { text-decoration: line-through; }
+  /* Pickers in the More sheet are full-size touch targets */
+  .song-more-sheet .input-select, #vocal-comfort-select, #vocal-rating-select, #song-tuning-select { min-height: 44px; }
   /* Play stays under the thumb while reading */
   .play-btn {
     position: fixed;
@@ -2358,4 +2371,18 @@ body.no-cloud .needs-cloud { display: none !important; }
   color: #fff;
   font-weight: 700;
   cursor: pointer;
+}
+
+/* Melody range: lowest and highest sung notes (More sheet and My Keys) */
+.melody-row { flex-wrap: wrap; padding: 6px 0; border-bottom: none; }
+.melody-pickers { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.melody-pickers .small-select { min-width: 74px; }
+.melody-to { color: var(--faint); font-size: 0.86rem; }
+.more-hint { margin: 0 0 4px; padding-bottom: 10px; border-bottom: 1px solid var(--line); color: var(--faint); font-size: 0.84rem; }
+.vocal-range-big { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 4px 0 8px; }
+.vocal-range-big strong { font-size: 1.5rem; }
+.vocal-range-pickers { display: flex; gap: 12px; flex-wrap: wrap; margin: 6px 0 10px; }
+.vocal-range-pickers label { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 0.9rem; }
+@media (max-width: 640px) {
+  .melody-pickers .small-select, .vocal-range-pickers .small-select { min-height: 44px; }
 }

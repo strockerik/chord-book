@@ -105,7 +105,7 @@
             <div class="toolbar-capo">
               <select id="capo-select" class="input-select small-select" aria-label="Capo"><option value="0">No capo</option><option value="1">Capo 1</option><option value="2">Capo 2</option><option value="3">Capo 3</option><option value="4">Capo 4</option><option value="5">Capo 5</option><option value="6">Capo 6</option><option value="7">Capo 7</option><option value="8">Capo 8</option><option value="9">Capo 9</option><option value="10">Capo 10</option><option value="11">Capo 11</option><option value="12">Capo 12</option></select>
               <span id="sounding-key-readout" class="sounding-pill" hidden></span>
-              <button type="button" class="ghost-btn tabs-toggle-btn" id="toggle-tabs-btn" aria-pressed="false" hidden>Hide tabs</button>
+              <button type="button" class="ghost-btn tabs-toggle-btn" id="toggle-tabs-btn" aria-pressed="false" hidden><span class="label-long">Hide tabs</span><span class="label-short" aria-hidden="true">Tabs</span></button>
             </div>
             <div class="toolbar-actions">
               <button type="button" class="solid-btn play-btn" id="perform-song-btn">▶ Play</button>
@@ -173,7 +173,7 @@
       <label class="more-check"><span>Hide repeated choruses</span><input type="checkbox" id="compact-chorus-toggle" /></label>
       <label class="more-check"><span>Nashville numbers</span><input type="checkbox" id="nashville-toggle" /></label>
 
-      <h4 class="more-heading">How it feels to sing</h4>
+      <h4 class="more-heading">Singing and tuning</h4>
       <div class="more-row">
         <label class="more-label" for="song-tuning-select">Guitar tuning</label>
         <select id="song-tuning-select" class="input-select small-select"></select>
@@ -200,6 +200,16 @@
         </select>
       </div>
       </div>
+      <div class="more-row melody-row">
+        <span class="more-label" id="melody-label">Melody</span>
+        <span class="melody-pickers" role="group" aria-labelledby="melody-label">
+          <select id="melody-low-select" class="input-select small-select" aria-label="Lowest sung note"></select>
+          <span class="melody-to" aria-hidden="true">to</span>
+          <select id="melody-high-select" class="input-select small-select" aria-label="Highest sung note"></select>
+          <button type="button" class="ghost-btn small-btn" id="find-melody-btn">Look up</button>
+        </span>
+      </div>
+      <p class="more-hint" id="melody-hint">Lowest and highest notes of the melody, as you sing it in this key.</p>
 
       <button type="button" class="ghost-btn danger-text more-delete" id="delete-song-btn">Delete song</button>
     </div>

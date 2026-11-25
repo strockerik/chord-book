@@ -336,7 +336,7 @@ __FIXTURE_BOOT__
     await sleep(50);
     const longVerses = Array.from({ length: 12 }, (_, v) =>
       `{start_of_verse: Verse ${v + 1}}\n` +
-      Array.from({ length: 6 }, () => "[G]Walking down the long [C]country road again [D]tonight with you").join("\n") +
+      Array.from({ length: 6 }, (_, l) => `[G]Walking down road ${v + 1} the long [C]country mile ${l + 1} again [D]tonight with you`).join("\n") +
       "\n{end_of_verse}").join("\n\n");
     doc.getElementById("import-paste-text").value = `{title: Long Test Song}\n{key: G}\n\n${longVerses}`;
     doc.getElementById("import-parse-free-btn").click();

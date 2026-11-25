@@ -21,6 +21,18 @@ import {
   parseChord
 } from "./chords.js";
 import { parse } from "./chordpro.js";
+import {
+  getVocalRange,
+  getManualVocalRange,
+  sungRange,
+  rangeFit,
+  bestRangeShift,
+  rangeText,
+  midiToNote,
+  songsMissingMelody,
+  NOTE_LOWEST,
+  NOTE_HIGHEST
+} from "./melody.js";
 
 /**
  * Compute the effective Shapes Key and Concert Sounding Key for a song row.
@@ -283,8 +295,7 @@ export function getIdealVocalRangeRecommendations(songDraftOrRow, librarySongs =
   const currentRoot = currentSoundingKey.endsWith("m") ? currentSoundingKey.slice(0, -1) : currentSoundingKey;
   const currentSoundingPitch = NOTE_TO_PITCH[currentRoot] ?? 0;
 
-  const allOptions = idealCenters.map((center, idx) => {
-    const targetSoundingKey = isMinorSong ? center.minor : center.major;
+  const optionFor = (targetSoundingKey, idx, centerLabel) => {
     const targetRoot = targetSoundingKey.endsWith("m") ? targetSoundingKey.slice(0, -1) : targetSoundingKey;
     const targetPitch = NOTE_TO_PITCH[targetRoot] ?? 0;
 
@@ -310,9 +321,10 @@ export function getIdealVocalRangeRecommendations(songDraftOrRow, librarySongs =
     }
     const purePlayability = pureChords.length ? Math.round((pureOpen / pureChords.length) * 100) : 100;
 
-    // Also compute best easy open-chord Capo option (capo 1..6) that still sounds in targetSoundingKey
+    // Also compute best easy open-chord Capo option (capo 1..5; higher is rarely practical) that
+    // still sounds in targetSoundingKey
     const capoCandidates = suggestCapoPositions(pureChords, frettedKey)
-      .filter((c) => c.capo >= 1 && c.capo <= 6);
+      .filter((c) => c.capo >= 1 && c.capo <= 5);
     const bestCapo = capoCandidates[0] || null;
 
     let capoOption = null;
@@ -338,7 +350,7 @@ export function getIdealVocalRangeRecommendations(songDraftOrRow, librarySongs =
       priority: idx,
       absDist: Math.abs(shiftFromCurrent),
       targetSoundingKey,
-      centerLabel: center.label,
+      centerLabel,
       pureOption: {
         kind: "transpose",
         targetSoundingKey,
@@ -353,7 +365,9 @@ export function getIdealVocalRangeRecommendations(songDraftOrRow, librarySongs =
       },
       capoOption
     };
-  });
+  };
+  const allOptions = idealCenters.map((center, idx) =>
+    optionFor(isMinorSong ? center.minor : center.major, idx, center.label));
 
   // Order by closest pitch shift first (preferring non-zero shift when song isn't already in that key)
   allOptions.sort((a, b) => a.absDist - b.absDist || a.priority - b.priority);
@@ -361,20 +375,48 @@ export function getIdealVocalRangeRecommendations(songDraftOrRow, librarySongs =
   // Pick top pure transpose option (if already in one ideal key, also expose the next closest non-current ideal key)
   const nonZeroPure = allOptions.find((o) => o.absDist > 0)?.pureOption || allOptions[0]?.pureOption || null;
   const bestMatch = allOptions[0] || null;
-  const pureTranspose = !isAlreadyIdeal ? bestMatch?.pureOption : nonZeroPure;
-  const easyCapo = bestMatch?.capoOption || allOptions.find((o) => o.capoOption)?.capoOption || null;
+  let pureTranspose = !isAlreadyIdeal ? bestMatch?.pureOption : nonZeroPure;
+  let easyCapo = bestMatch?.capoOption || allOptions.find((o) => o.capoOption)?.capoOption || null;
+  let alreadyIdeal = isAlreadyIdeal;
+
+  // When the melody's lowest and highest notes are known, they decide: a song whose notes sit
+  // inside your range is a good fit in any key, and one that runs past it moves just far enough.
+  let range = null;
+  const voice = librarySongs.length ? getVocalRange(librarySongs) : getManualVocalRange();
+  const sung = voice ? sungRange({ ...songDraftOrRow, key: writtenKey }) : null;
+  if (voice && sung) {
+    const now = rangeFit(sung, voice);
+    const best = bestRangeShift(sung, voice, currentSoundingKey, idealCenters.map((c) => c.pitch));
+    range = { voice, sung: now, fits: now.miss === 0, wide: false, after: null };
+    if (range.fits) {
+      alreadyIdeal = true;
+    } else if (best.shift !== 0 && best.fit.miss < now.miss) {
+      const option = optionFor(transposeKey(currentSoundingKey, best.shift), 0, "");
+      pureTranspose = { ...option.pureOption, label: `Rewrite in ${option.pureOption.targetShapesKey}` };
+      easyCapo = option.capoOption;
+      alreadyIdeal = false;
+      range.after = best.fit;
+    } else {
+      // No key brings every note inside: the melody spans more than your range.
+      range.wide = true;
+      pureTranspose = null;
+      easyCapo = null;
+      alreadyIdeal = false;
+    }
+  }
 
   return {
     writtenKey,
     currentShapesKey,
     currentCapo,
     currentSoundingKey,
-    isAlreadyIdeal,
+    isAlreadyIdeal: alreadyIdeal,
     idealMajorKeys,
     idealLabels,
     pureTranspose,
     easyCapo,
-    allOptions
+    allOptions,
+    range
   };
 }
 
@@ -407,6 +449,63 @@ export function renderAnalyticsDashboardHTML(songs = []) {
   const second = data.topKeyCenters[1];
 
   const maxCount = Math.max(1, ...data.activeProfiles.map((p) => p.songCount));
+
+  // Bad fit: songs you rated hard to sing, whose melody runs past your range, or (when the
+  // melody isn't known) that sound outside your best keys, each with the simplest fix. Tapping
+  // one opens it, where "Rewrite in ..." applies the fix.
+  const voice = getVocalRange(songs);
+  const badFits = songs.map((song) => {
+    const keys = getSongEffectiveKeys(song);
+    const rec = getIdealVocalRangeRecommendations(song, songs);
+    const comfort = song.vocal_comfort || "";
+    const rating = song.vocal_rating;
+    const ratedHard = comfort === "too_low" || comfort === "high_stretch" || (rating != null && rating <= 2);
+    const range = rec?.range;
+    // Half a step from a best key is close enough; two or more is worth fixing.
+    const outside = range
+      ? !range.fits
+      : !!(rec && !rec.isAlreadyIdeal && rec.pureTranspose && Math.abs(rec.pureTranspose.semitoneShiftFromCurrent) >= 2);
+    if (!ratedHard && !outside) return null;
+    let why = comfort === "high_stretch" ? "Too high" : comfort === "too_low" ? "Too low"
+      : rating != null && rating <= 2 ? `Rated ${rating}★` : "Outside your best keys";
+    if (!ratedHard && range) why = range.sung.over ? "Too high" : "Too low";
+    const sings = range ? `Sings ${rangeText(range.sung)}` : `Sounds in ${keys.soundingKey}`;
+    let fix;
+    if (range && range.wide) {
+      fix = `in any key the melody is wider than your ${rangeText(range.voice)} range`;
+    } else if (outside && rec.pureTranspose) {
+      fix = `Rewrite in ${rec.pureTranspose.targetShapesKey}` +
+        (range?.after ? ` to sing ${rangeText(range.after)}` : "") +
+        (rec.easyCapo ? `, or ${rec.easyCapo.label}` : "");
+    } else {
+      const step = comfort === "too_low" ? 2 : -2;
+      fix = `Try ${transposeKey(keys.shapesKey, step)} (${step > 0 ? "up" : "down"} a whole step)`;
+    }
+    return { song, sings, why, fix, ratedHard };
+  }).filter(Boolean).sort((a, b) => (b.ratedHard - a.ratedHard) || a.song.title.localeCompare(b.song.title));
+  const missingMelody = songsMissingMelody(songs).length;
+  const withMelody = songs.filter((x) => sungRange(x)).length;
+  const manual = getManualVocalRange();
+  const noteOptions = (selected, blank) => `<option value="">${blank}</option>` +
+    Array.from({ length: NOTE_HIGHEST - NOTE_LOWEST + 1 }, (_, i) => NOTE_LOWEST + i)
+      .map((m) => `<option value="${m}"${m === selected ? " selected" : ""}>${midiToNote(m)}</option>`).join("");
+  const rangePanel = `
+      <section class="analytics-panel vocal-range-panel">
+        <h4 class="analytics-panel-title">Your vocal range</h4>
+        ${voice ? `
+          <p class="vocal-range-big"><strong>${esc(rangeText(voice))}</strong>
+            <span class="stat-sub">${voice.from === "you" ? "Set by you" : `From ${voice.count} songs you sing well`}</span></p>
+          ${voice.from === "songs" && voice.stretchHigh != null ? `<p class="analytics-panel-desc">Songs reaching ${esc(midiToNote(voice.stretchHigh))} felt like a stretch.</p>` : ""}
+          ${voice.from === "songs" && voice.stretchLow != null ? `<p class="analytics-panel-desc">Songs going down to ${esc(midiToNote(voice.stretchLow))} felt too low.</p>` : ""}
+        ` : `<p class="analytics-panel-desc">Rate two or more songs Sweet spot (or 4★) that have a melody range, or set your range here.</p>`}
+        <div class="vocal-range-pickers">
+          <label>Lowest <select id="vocal-range-low" class="input-select small-select" aria-label="Your lowest comfortable note">${noteOptions(manual?.low, "Auto")}</select></label>
+          <label>Highest <select id="vocal-range-high" class="input-select small-select" aria-label="Your highest comfortable note">${noteOptions(manual?.high, "Auto")}</select></label>
+        </div>
+        <p class="analytics-panel-desc">Melody known for ${withMelody} of ${songs.length} songs. Each song’s lowest and highest sung notes are under More → Singing and tuning.</p>
+        ${missingMelody ? `<button type="button" class="ghost-btn small-btn" id="find-melody-ranges-btn">Look up ${missingMelody} melody range${missingMelody === 1 ? "" : "s"} with AI</button>` : ""}
+      </section>
+  `;
   const unratedCount = songs.filter((s) => s.vocal_rating == null && !s.vocal_comfort).length;
 
   return `
@@ -429,6 +528,8 @@ export function renderAnalyticsDashboardHTML(songs = []) {
           </span>
         </div>
       </div>
+
+      ${rangePanel}
 
       <section class="analytics-panel">
         <h4 class="analytics-panel-title">Keys you sing in</h4>
@@ -480,6 +581,26 @@ export function renderAnalyticsDashboardHTML(songs = []) {
             `;
           }).join("")}
         </div>
+      </section>
+
+      <section class="analytics-panel">
+        <h4 class="analytics-panel-title">Bad fit${badFits.length ? ` (${badFits.length})` : ""}</h4>
+        ${badFits.length ? `
+          <p class="analytics-panel-desc">Songs you rated hard to sing, songs whose melody runs past your range, and songs without a range two or more half steps from your best keys. Tap one to open it and apply the fix.</p>
+          <div class="best-fit-songs-list">
+            ${badFits.map(({ song, sings, why, fix }) => `
+              <div class="fit-song-row" data-open-song="${esc(song.id)}" role="button" tabindex="0">
+                <div class="fit-song-main">
+                  <strong class="fit-song-title">${esc(song.title)}</strong>
+                  <span class="fit-song-sub">${esc(sings)} • ${esc(fix)}</span>
+                </div>
+                <div class="fit-song-badges">
+                  <span class="fit-badge is-bad-fit">${esc(why)}</span>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<p class="analytics-panel-desc">${voice ? "Every song fits your range or sits in one of your best keys." : "Every song sits in one of your best keys."}</p>`}
       </section>
     </div>
   `;

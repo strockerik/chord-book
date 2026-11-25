@@ -68,9 +68,13 @@ def main():
     check("Daily limit skips only accounts listed in the CB_UNLIMITED_EMAILS secret",
           'Deno.env.get("CB_UNLIMITED_EMAILS")' in src and "if (!unlimited) {" in src and "@" not in src.split("CB_UNLIMITED_EMAILS")[1][:400])
     check("A linked page with no chords is refused before any paid call",
-          "chordLines < 4 && inlineChords < 6" in src and src.index("chordLines < 4") < src.index('rpc("increment_ai_usage"'))
+          "chordLines < 4 && inlineChords < 6" in src and src.index("chordLines < 4") < src.index('rpc("increment_ai_usage"', src.index('const userContent')))
     check("Matches source lines only when their chords agree (a chorus in a new key stays)",
           "sameNames(" in src and "sameRoots(" in src and "Chorus in D" in src)
+    melody = src[src.find('if (reqType === "melody")'):src.find('const userContent')]
+    check("Melody lookup checks the daily limit, fails closed, logs usage, and sends only titles",
+          'increment_ai_usage' in melody and "LIMIT_CHECK_FAILED" in melody and "log_ai_call" not in melody and 'logAiCall(supabase, "cb_melody"' in melody
+          and "chordpro" not in melody and "MAX_MELODY_SONGS" in melody)
     check("Retries once when the AI is busy", "[429, 500, 502, 503, 529].includes(res.status)" in src and '"BUSY"' in src)
     check("Accepts A2 and Asus4-style chord names", "|6\\/9|69|6|5|4|2)?" in src)
     check("Uses SSRF safety helpers (parseAllowedUrl, resolvesPublic, readCapped)",

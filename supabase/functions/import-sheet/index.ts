@@ -11,11 +11,14 @@
 //   { type: "image", images: [{ mediaType: "image/jpeg"|"image/png"|"image/webp", data: "<base64>" }], note?: "<optional steer>" }
 //   { type: "pdf", pdfData: "<base64>", fileName?: "...", note?: "<optional steer>" }
 //   { type: "url", url: "<public sheet page>", note?: "<optional steer>" }
+//   { type: "melody", songs: [{ id, title, artist?, key? }] }   (up to 25; no lyrics are sent)
 //
 // Response: always HTTP 200 with
 //   { result: { title, artist, key, capo, tempo, time_signature, tuning, genre, form, chordpro, notes },
 //     results: [every song found; a set list PDF can hold several], missed: songs that couldn't be read }
 // or { error: "..." }
+// The melody type answers { melodies: [{ id, recording_key, low, high, confidence }] }: the lowest
+// and highest sung notes of each song's best-known recording as MIDI numbers (60 = middle C).
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { getDocumentProxy } from "npm:unpdf@0.12.1";
@@ -882,6 +885,64 @@ function schemaFor(withSource: boolean) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Melody range: the lowest and highest notes the lead singer sings, so the app can match songs
+// to the player's real vocal range and not just their favourite keys.
+// ---------------------------------------------------------------------------
+const MAX_MELODY_SONGS = 25;
+const MELODY_SCHEMA = {
+  type: "object",
+  properties: {
+    songs: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "The id given for this song" },
+          known: { type: "boolean", description: "True only if you know this song's sung melody well enough to name its lowest and highest notes" },
+          recording_key: { type: ["string", "null"], description: "Key of the recording the notes come from, e.g. 'A', 'F#m', 'Bb'" },
+          low_note: { type: ["string", "null"], description: "Lowest note of the lead vocal melody in scientific pitch, where C4 is middle C, e.g. 'A2', 'F#3'" },
+          high_note: { type: ["string", "null"], description: "Highest note of the lead vocal melody, e.g. 'E4', 'Bb4'" },
+          confidence: { type: "string", enum: ["high", "medium", "low"] }
+        },
+        required: ["id", "known", "recording_key", "low_note", "high_note", "confidence"]
+      }
+    }
+  },
+  required: ["songs"]
+};
+
+const MELODY_PROMPT = `You know the melodies of popular songs, hymns, and worship songs. For each song, give the lowest and highest notes of the lead vocal melody and the key it is sung in.
+
+- Use the best-known recording by the named artist. For a hymn, use the melody in its usual hymnal key.
+- Count the main melody the lead singer sings, including chorus peaks and a final chorus that goes up. Leave out brief ad-libs, shouts, spoken parts, and backing vocals.
+- Write notes in scientific pitch, where C4 is middle C. A man's melody usually sits between about G2 and A4, a woman's between about F3 and E5.
+- The sheet's key is a hint for which arrangement is meant; the notes are still the recording's.
+- If you don't know a song's melody well enough to name its notes, set known false and the notes null. Never guess from the title alone.`;
+
+const NOTE_PITCH: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+// "F#3" -> 54 (MIDI, 60 = middle C), or null.
+function noteToMidi(note: unknown): number | null {
+  const m = String(note || "").trim().match(/^([A-Ga-g])([#b♯♭]?)(-?\d)$/);
+  if (!m) return null;
+  const acc = m[2] === "#" || m[2] === "♯" ? 1 : m[2] === "b" || m[2] === "♭" ? -1 : 0;
+  return (Number(m[3]) + 1) * 12 + NOTE_PITCH[m[1].toUpperCase()] + acc;
+}
+function cleanKey(key: unknown): string | null {
+  const m = String(key || "").trim().match(/^([A-G])([#b]?)\s*(m|min|minor)?$/i);
+  return m ? m[1].toUpperCase() + m[2] + (m[3] ? "m" : "") : null;
+}
+// deno-lint-ignore no-explicit-any
+function melodyFromAi(item: any) {
+  if (!item || item.known !== true) return null;
+  const low = noteToMidi(item.low_note);
+  const high = noteToMidi(item.high_note);
+  const key = cleanKey(item.recording_key);
+  // A sung melody spans about an octave or two, between a low bass note and a high soprano note.
+  if (low == null || high == null || !key || low < 33 || high > 88 || high <= low || high - low > 30) return null;
+  return { id: String(item.id), recording_key: key, low, high, confidence: ["high", "medium", "low"].includes(item.confidence) ? item.confidence : "low" };
+}
+
 const SYSTEM_PROMPT = `You turn guitar chord sheets into clean Chord Book sheets. People read them while playing guitar and singing, so every chord must sit on the right word and every line must read like the song.
 
 The input may be a messy copy from a chord website, screenshots, a photo, a PDF, or an existing sheet to check.
@@ -974,6 +1035,74 @@ Deno.serve(async (req: Request) => {
 
   const reqType = String(body?.type || "");
   const note = typeof body?.note === "string" ? body.note.trim().slice(0, MAX_NOTE_CHARS) : "";
+  const unlimited = UNLIMITED_EMAILS.has(String(userData.user.email || "").toLowerCase());
+
+  // Melody ranges: one short call for a batch of songs, by title and artist only.
+  if (reqType === "melody") {
+    const list = (Array.isArray(body?.songs) ? body.songs : [])
+      // deno-lint-ignore no-explicit-any
+      .filter((x: any) => x && typeof x.id === "string" && typeof x.title === "string" && x.title.trim())
+      .slice(0, MAX_MELODY_SONGS)
+      // deno-lint-ignore no-explicit-any
+      .map((x: any) => ({
+        id: x.id.slice(0, 64),
+        title: x.title.trim().slice(0, 120),
+        artist: typeof x.artist === "string" ? x.artist.trim().slice(0, 120) : "",
+        key: cleanKey(x.key) || ""
+      }));
+    if (!list.length) return json({ error: "No songs to look up." });
+    if (!unlimited) {
+      const { data: capCount, error: capErr } = await supabase.rpc("increment_ai_usage", {
+        usage_kind: "cb_import",
+        daily_limit: DAILY_IMPORT_LIMIT
+      });
+      if (capErr || typeof capCount !== "number") {
+        console.error("increment_ai_usage failed:", capErr);
+        return json({ error: LIMIT_CHECK_FAILED });
+      }
+      if (capCount < 0) {
+        return json({ error: `You’ve reached today’s limit of ${DAILY_IMPORT_LIMIT} AI requests. Try again tomorrow.` });
+      }
+    }
+    const t0 = performance.now();
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY!, "anthropic-version": ANTHROPIC_VERSION },
+        body: JSON.stringify({
+          model: MODEL_TEXT,
+          max_tokens: 4096,
+          system: MELODY_PROMPT,
+          tools: [{ name: "save_melody_ranges", description: "Return each song's melody range", input_schema: MELODY_SCHEMA }],
+          tool_choice: { type: "tool", name: "save_melody_ranges" },
+          messages: [{
+            role: "user",
+            content: "Songs:\n" + list.map((x: { id: string; title: string; artist: string; key: string }) =>
+              `- id ${x.id}: "${x.title}"${x.artist ? ` by ${x.artist}` : ""}${x.key ? ` (sheet in ${x.key})` : ""}`).join("\n")
+          }]
+        })
+      });
+      const payload = await res.json().catch(() => null);
+      const ms = performance.now() - t0;
+      if (!res.ok) {
+        await logAiCall(supabase, "cb_melody", MODEL_TEXT, false, ms, payload?.usage, userId);
+        if ([429, 529].includes(res.status)) return json({ error: "The AI is busy right now. Try again in a minute." });
+        console.error(`Anthropic HTTP ${res.status}:`, String(payload?.error?.message || "").slice(0, 160));
+        return json({ error: "The AI couldn’t look those up. Try again later." });
+      }
+      // deno-lint-ignore no-explicit-any
+      const tool = (payload?.content || []).find((b: any) => b.type === "tool_use" && b.name === "save_melody_ranges");
+      const ids = new Set(list.map((x: { id: string }) => x.id));
+      const melodies = (Array.isArray(tool?.input?.songs) ? tool.input.songs : [])
+        .map(melodyFromAi)
+        .filter((m: { id: string } | null) => m && ids.has(m.id));
+      await logAiCall(supabase, "cb_melody", MODEL_TEXT, !!tool, ms, payload?.usage, userId);
+      return json({ melodies, unknown: list.length - melodies.length });
+    } catch (err) {
+      console.error("melody lookup error:", err);
+      return json({ error: "Couldn’t reach the AI. Try again later." });
+    }
+  }
   // deno-lint-ignore no-explicit-any
   const userContent: any[] = [];
   let model = MODEL_TEXT;
@@ -1091,7 +1220,6 @@ Deno.serve(async (req: Request) => {
   }
 
   // 3. Check daily cap right before paid call (fail closed!)
-  const unlimited = UNLIMITED_EMAILS.has(String(userData.user.email || "").toLowerCase());
   if (!unlimited) {
     const { data: capCount, error: capErr } = await supabase.rpc("increment_ai_usage", {
       usage_kind: "cb_import",

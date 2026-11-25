@@ -15,6 +15,7 @@
 | **Multi-Modal Import** | `js/chordpro.js` + `js/ai.js` + `supabase/functions/import-sheet/index.ts` handles: (1) pasted text of any kind (AI when signed in, free on-device formatting otherwise, including phone copies of chord sites), (2) 1–6 overlapping screenshot snips (paste with `Cmd+V` or drag/drop), (3) phone camera photos, and (4) uploaded PDFs. After any change to `index.ts`, paste it into the Supabase dashboard again to redeploy. |
 | **Sidebar Margin Notes** | Dedicated right-hand margin rail on every section for dynamic cues (*"Start quiet and get louder over this verse"*, *"Key change here"*), editable inline with one tap and stored in both ChordPro `{note: ...}` directives and `layout_prefs.sidebar_notes`. |
 | **Vocal Key Analytics** | `js/analytics.js` computes each song's **Concert Sounding Pitch Key** ($\text{Written Shapes Key} + \text{Preferred Transpose} + \text{Capo}$), ranks your best singing tonal centers (`A / F#m`, `G / Em`, etc.), and recommends keys and capo positions for new songs. |
+| **Melody Range** | `js/melody.js` keeps each song's lowest and highest sung notes (set by hand under More, or looked up by the AI from the best-known recording) against the written key, so transpose, capo, and tuning move them. My Keys works out your vocal range from the songs you sing well (or the range you set), flags songs whose notes run past it under Bad fit, and suggests the key that brings every note inside. |
 
 ---
 
@@ -54,6 +55,7 @@ Run all 4 test harnesses anytime from the terminal:
 python3 testing-skills/chords_test.py
 python3 testing-skills/chordpro_test.py
 python3 testing-skills/edge_function_policy_test.py
+python3 testing-skills/melody_test.py
 python3 testing-skills/render_fit_test.py
 python3 testing-skills/behaviour_test.py
 ```
@@ -63,6 +65,7 @@ python3 testing-skills/behaviour_test.py
 | [chords_test.py](file:///Users/erikstrock/Desktop/myStuff/Apps/Chord-Book/testing-skills/chords_test.py) | 70 checks: every chord quality in SPEC 5.3, non-chord word rejection, 12-semitone transpose round-trips, key-based sharp/flat spelling, capo math & suggestions, Nashville numbers, SVG chord voicings, and tonal center grouping. |
 | [chordpro_test.py](file:///Users/erikstrock/Desktop/myStuff/Apps/Chord-Book/testing-skills/chordpro_test.py) | 16 checks: lossless ChordPro `parse`/`serialize` round-trip, standard 2-line chords-over-lyrics alignment, and a collapsed single-line paste. |
 | [edge_function_policy_test.py](file:///Users/erikstrock/Desktop/myStuff/Apps/Chord-Book/testing-skills/edge_function_policy_test.py) | 10 checks: publishable key helper, daily caps failing closed (`LIMIT_CHECK_FAILED`), `log_ai_call` token logging, SSRF URL helpers, and live execution of the `==== CHORD NET ====` block in headless Chrome. |
+| [melody_test.py](file:///Users/erikstrock/Desktop/myStuff/Apps/Chord-Book/testing-skills/melody_test.py) | 21 checks: melody notes follow capo, transpose, tuning, and a rewritten key; an AI range from the recording maps onto the sheet; octave choice for a melody written for another voice; your range from the songs you sing well; key advice and Bad fit that bring every note inside your range. |
 | [render_fit_test.py](file:///Users/erikstrock/Desktop/myStuff/Apps/Chord-Book/testing-skills/render_fit_test.py) | 18 checks: `1-Sheet (8.5×11")` and `2-Sheet (8.5×11")` auto-fit engine (`scrollHeight <= clientHeight`), chord-over-syllable alignment, sidebar margin note editing, transposition, ugly paste import UI flow, vocal key analytics, and 360px/390px/430px responsive viewports. |
 | [behaviour_test.py](file:///Users/erikstrock/Desktop/myStuff/Apps/Chord-Book/testing-skills/behaviour_test.py) | 15 checks: per-song saved settings + Undo, Rewrite in Key + Undo, Delete Song + Undo, full-screen Stage Performance Mode + auto-scroll, Set Lists, Service Worker registration, and zero CSP violations. |
 | [ai_import_live_test.py](file:///Users/erikstrock/Desktop/myStuff/Apps/Chord-Book/testing-skills/ai_import_live_test.py) | **Paid, opt-in (`--spend`).** Signs in as the House Index test account and sends every file in the git-ignored `House Index Test/` folder (photos, screenshots, PDFs, text copies, links) through the deployed `import-sheet`. Grades each sheet against the goals and against the owner's finished copies where they exist, then saves the songs to the test account (tag `import-test`) for review. |

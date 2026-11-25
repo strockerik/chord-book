@@ -33,6 +33,8 @@ function toPhrase(bars) {
   return bars <= 1 ? 1 : (bars % 2 ? bars + 1 : bars);
 }
 
+// A line's length in bars, unrounded: a short line (a sheet splits long ones for reading) is part
+// of a phrase, not a phrase of its own. Sections round up to whole two-bar phrases.
 function lineBars(line, meter) {
   if (line.tab !== undefined) {
     const rows = String(line.tab).split("\n").length;
@@ -41,16 +43,19 @@ function lineBars(line, meter) {
   if (!line.segments) return 0;
   const chords = line.segments.filter((segment) => segment.chord).length;
   const lyric = line.segments.map((segment) => segment.lyric || "").join("");
-  if (!/[A-Za-z]/.test(lyric)) return toPhrase(chords);
+  if (!/[A-Za-z]/.test(lyric)) return chords;
 
-  const countsPerSyllable = meter.top % 3 === 0 ? 1 : 0.75;
-  const barsFromWords = Math.ceil((countSyllables(lyric) * countsPerSyllable) / meter.top);
-  const barsFromChords = Math.ceil(chords / (meter.top === 3 ? 1 : 2));
-  return toPhrase(Math.max(2, barsFromWords, barsFromChords));
+  // People sing at a fairly steady rate whatever the tempo, so a syllable takes more beats in a
+  // fast song than in a slow one (about 0.45 s each, within sensible limits).
+  const beatsPerSyllable = Math.max(0.5, Math.min(2, (meter.bpm || 76) / 130));
+  const barsFromWords = (countSyllables(lyric) * beatsPerSyllable) / meter.top;
+  const barsFromChords = chords / (meter.top === 3 ? 1 : 2);
+  return Math.max(1, barsFromWords, barsFromChords);
 }
 
 function sectionBars(section, meter) {
-  return (section?.lines || []).reduce((sum, line) => sum + lineBars(line, meter), 0);
+  const bars = (section?.lines || []).reduce((sum, line) => sum + lineBars(line, meter), 0);
+  return bars ? toPhrase(Math.ceil(bars - 0.01)) : 0;
 }
 
 function repeatCount(text) {
@@ -118,6 +123,7 @@ export function estimateSongTiming(song, parsed, renderedSections = null) {
   const meter = readMeter(song?.time_signature || parsed?.meta?.time);
   const statedBpm = Number(song?.tempo || parsed?.meta?.tempo || 0);
   const bpm = statedBpm >= 20 && statedBpm <= 300 ? statedBpm : TYPICAL_BPM[meter.kind];
+  meter.bpm = bpm;
   const noteText = `${song?.notes || ""}\n${parsed?.meta?.note || ""}`;
   const bars = barsFromForm(noteText, parsed?.sections || [], meter) ?? barsFromSheet(parsed || {}, renderedSections, meter);
   const statedSeconds = Number(song?.duration_sec || 0);

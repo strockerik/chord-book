@@ -40,7 +40,19 @@ import { getIdealVocalRangeRecommendations } from "./analytics.js";
 import { getDeviceProfile } from "./device.js";
 import { openPerformanceMode } from "./perform.js";
 import { printCurrentSheet, downloadSelfContainedSongHTML } from "./send.js";
-import { runAiChordAlignmentCheck } from "./ai.js";
+import { runAiChordAlignmentCheck, lookUpMelodyRanges } from "./ai.js";
+import {
+  NOTE_LOWEST,
+  NOTE_HIGHEST,
+  midiToNote,
+  rangeText,
+  storedMelody,
+  sungRange,
+  melodyFromSung,
+  melodyFromRecording,
+  getVocalRange,
+  rangeFit
+} from "./melody.js";
 
 let activeSong = null;
 let viewState = {
@@ -57,6 +69,7 @@ let viewState = {
   leftHanded: false,
   vocalRating: null,
   vocalComfort: null,
+  melody: null,           // layout_prefs.melody: lowest and highest sung notes (js/melody.js)
   tuning: "E A D G B E",
   sidebarNotes: {},
   alignMode: false,
@@ -75,6 +88,26 @@ export function getActiveSong() {
 
 export function getViewState() {
   return viewState;
+}
+
+/** A melody range found in the background reaches the open song, so its next save keeps it. */
+export function applyMelodyToOpenSong(songId, melody) {
+  if (!activeSong || activeSong.id !== songId) return false;
+  activeSong = { ...activeSong, layout_prefs: { ...(activeSong.layout_prefs || {}), melody } };
+  viewState.melody = melody;
+  refreshSongToolbar();
+  return true;
+}
+
+// The song as it is set up on screen now, for melody math.
+function songAsShown() {
+  return {
+    ...activeSong,
+    capo: viewState.capo,
+    preferred_transpose: viewState.semitoneDelta,
+    tuning: viewState.tuning,
+    layout_prefs: { ...(activeSong?.layout_prefs || {}), melody: viewState.melody || undefined }
+  };
 }
 
 export function initSongController({ onSaveSong, onDeleteSong, getLibrarySongs }) {
@@ -208,6 +241,62 @@ export function initSongController({ onSaveSong, onDeleteSong, getLibrarySongs }
     viewState.vocalRating = parseInt(e.target.value, 10) || null;
     viewState.isDirty = true;
     refreshSongToolbar();
+  });
+
+  // Melody range: the pickers show the notes as sung in the key on screen now.
+  const lowPick = document.getElementById("melody-low-select");
+  const highPick = document.getElementById("melody-high-select");
+  const noteOptions = `<option value="">—</option>` +
+    Array.from({ length: NOTE_HIGHEST - NOTE_LOWEST + 1 }, (_, i) => NOTE_LOWEST + i)
+      .map((m) => `<option value="${m}">${midiToNote(m)}</option>`).join("");
+  if (lowPick) lowPick.innerHTML = noteOptions;
+  if (highPick) highPick.innerHTML = noteOptions;
+  const onMelodyPick = () => {
+    if (!activeSong) return;
+    const low = parseInt(lowPick.value, 10);
+    const high = parseInt(highPick.value, 10);
+    if (!lowPick.value && !highPick.value) {
+      viewState.melody = null;
+    } else if (!lowPick.value || !highPick.value) {
+      return; // waiting for the other note
+    } else if (high <= low) {
+      toastError("Pick a highest note above the lowest.");
+      refreshMelodyPickers();
+      return;
+    } else {
+      viewState.melody = melodyFromSung(songAsShown(), low, high, "you");
+    }
+    viewState.isDirty = true;
+    refreshSongToolbar();
+  };
+  lowPick?.addEventListener("change", onMelodyPick);
+  highPick?.addEventListener("change", onMelodyPick);
+  document.getElementById("find-melody-btn")?.addEventListener("click", async (e) => {
+    if (!activeSong) return;
+    const btn = e.currentTarget;
+    const songId = activeSong.id;
+    btn.disabled = true;
+    btn.textContent = "Looking…";
+    try {
+      const res = await lookUpMelodyRanges([songAsShown()]);
+      if (res.error) {
+        toastError(res.error);
+        return;
+      }
+      const found = res.melodies?.[0];
+      if (!found) {
+        toast("The AI doesn’t know this melody. Pick the lowest and highest notes yourself.");
+        return;
+      }
+      if (!activeSong || activeSong.id !== songId) return;
+      viewState.melody = melodyFromRecording(songAsShown(), found);
+      viewState.isDirty = true;
+      refreshSongToolbar();
+      toast(`Melody runs ${rangeText(sungRange(songAsShown()))} in this key (AI estimate from the recording).`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Look up";
+    }
   });
 
   // Key, capo and view choices save themselves, including when the app is put away mid-song.
@@ -500,6 +589,7 @@ export function openSongView(song, { discardPending = false } = {}) {
     tuning: song.tuning || parsed.meta.tuning || "E A D G B E",
     vocalRating: song.vocal_rating ?? null,
     vocalComfort: song.vocal_comfort ?? null,
+    melody: prefs.melody || null,
     sidebarNotes: JSON.parse(JSON.stringify(prefs.sidebar_notes || {})),
     alignMode: false,
     isDirty: false
@@ -539,7 +629,8 @@ export function refreshSongView() {
       show_diagrams: viewState.showDiagrams,
       font_offset: viewState.fontOffset,
       accidental_pref: viewState.accidentalPref,
-      sidebar_notes: viewState.sidebarNotes
+      sidebar_notes: viewState.sidebarNotes,
+      melody: viewState.melody || undefined
     }
   };
 
@@ -602,7 +693,8 @@ function refreshSongToolbar(fitInfo = null) {
   if (tabsBtn) {
     const hasTab = /\{\s*(start_of_tab|sot)\b/i.test(activeSong.chordpro || "") || /^\s*[eBGDAE]\s*[|:][-\d]/m.test(activeSong.chordpro || "");
     tabsBtn.hidden = !hasTab;
-    tabsBtn.textContent = viewState.hideTabs ? "Show tabs" : "Hide tabs";
+    tabsBtn.querySelector(".label-long").textContent = viewState.hideTabs ? "Show tabs" : "Hide tabs";
+    tabsBtn.title = viewState.hideTabs ? "Show guitar tab" : "Hide guitar tab";
     tabsBtn.setAttribute("aria-pressed", viewState.hideTabs ? "true" : "false");
     tabsBtn.classList.toggle("is-active", !!viewState.hideTabs);
   }
@@ -624,6 +716,8 @@ function refreshSongToolbar(fitInfo = null) {
 
   const tuningControl = document.getElementById("song-tuning-select");
   if (tuningControl) tuningControl.value = tuningInfo.id;
+
+  refreshMelodyPickers();
 
   const columnsRow = document.getElementById("more-columns-row");
   if (columnsRow) columnsRow.hidden = viewState.pageMode === "scroll";
@@ -648,19 +742,40 @@ function refreshSongToolbar(fitInfo = null) {
   if (viewState.isDirty) scheduleAutosave();
 }
 
+// Shows the melody as you'd sing it now, in the octave that suits your range.
+function refreshMelodyPickers() {
+  const lowPick = document.getElementById("melody-low-select");
+  const highPick = document.getElementById("melody-high-select");
+  const hint = document.getElementById("melody-hint");
+  if (!lowPick || !highPick || !activeSong) return;
+  const shown = songAsShown();
+  let sung = sungRange(shown);
+  const voice = getVocalRange(getLibrarySongsCallback ? getLibrarySongsCallback() : []);
+  if (sung && voice) sung = { ...sung, ...rangeFit(sung, voice) };
+  const inList = (m) => (m >= NOTE_LOWEST && m <= NOTE_HIGHEST ? String(m) : "");
+  lowPick.value = sung ? inList(sung.low) : "";
+  highPick.value = sung ? inList(sung.high) : "";
+  if (hint) {
+    const m = storedMelody(shown);
+    hint.textContent = !m
+      ? "Lowest and highest notes of the melody, as you sing it in this key. Look up asks the AI."
+      : m.source === "ai"
+        ? `AI estimate from the recording${m.confidence === "low" ? " (unsure)" : ""}. Change either note if it’s off.`
+        : "Set by you, for the key on screen.";
+  }
+}
+
 function renderSmartAdvisorBanner(parsed, currentShapesKey, soundingKey) {
   const banner = document.getElementById("song-smart-advisor");
   if (!banner || !activeSong) return;
 
   const allSongs = getLibrarySongsCallback ? getLibrarySongsCallback() : [activeSong];
-  const rec = getIdealVocalRangeRecommendations(
-    { ...activeSong, preferred_transpose: viewState.semitoneDelta, capo: viewState.capo, tuning: viewState.tuning },
-    allSongs
-  );
+  const rec = getIdealVocalRangeRecommendations(songAsShown(), allSongs);
   // Capo ideas are about what you fret, so they ignore the guitar's tuning.
   const frettedKey = transposeKey(currentShapesKey, viewState.capo, viewState.accidentalPref);
   const capoSuggestions = suggestCapoPositions(parsed.allChords, frettedKey);
-  const bestOpenCapo = capoSuggestions.find((c) => c.capo > 0 && c.score > 80);
+  // Past the 5th fret the guitar sounds thin and the neck gets cramped, so those aren't offered.
+  const bestOpenCapo = capoSuggestions.find((c) => c.capo > 0 && c.capo <= 5 && c.score > 80);
 
   const tips = [];
   // A song outside your sweet-spot keys gets an offer to rewrite it in the nearest one, shown
@@ -676,9 +791,12 @@ function renderSmartAdvisorBanner(parsed, currentShapesKey, soundingKey) {
         `<button type="button" class="advisor-apply-btn is-secondary" id="apply-ideal-capo-btn">${esc(capoOpt.label)}</button>`
       );
     }
-    tips.push(
-      `<span><strong>Better for your voice:</strong> this sounds in ${esc(soundingKey)}. Your sweet-spot keys are ${esc(rec.idealLabels.join(", "))}. ${btns.join(" ")}</span>`
-    );
+    const why = rec.range
+      ? `the melody runs ${esc(rangeText(rec.range.sung))} here and your range is ${esc(rangeText(rec.range.voice))}.${rec.range.after ? ` In ${esc(pt.targetShapesKey)} you’d sing ${esc(rangeText(rec.range.after))}.` : ""}`
+      : `this sounds in ${esc(soundingKey)}. Your sweet-spot keys are ${esc(rec.idealLabels.join(", "))}.`;
+    tips.push(`<span><strong>Better for your voice:</strong> ${why} ${btns.join(" ")}</span>`);
+  } else if (rec?.range?.wide) {
+    tips.push(`<span><strong>Wide melody:</strong> it runs ${esc(rangeText(rec.range.sung))}, more than your ${esc(rangeText(rec.range.voice))} in any key.</span>`);
   }
   if (bestOpenCapo && bestOpenCapo.capo !== viewState.capo && viewState.capo === 0) {
     tips.push(
@@ -789,6 +907,12 @@ function buildSongWithCurrentSettings() {
     accidental_pref: viewState.accidentalPref,
     sidebar_notes: JSON.parse(JSON.stringify(viewState.sidebarNotes))
   };
+  if (viewState.melody) {
+    nextPrefs.melody = viewState.melody;
+    delete nextPrefs.melody_unknown;
+  } else {
+    delete nextPrefs.melody;
+  }
   if (profile.isPhone) {
     nextPrefs.phone_page_mode = viewState.pageMode;
     nextPrefs.page_mode = prevPrefs.page_mode || "1-sheet";
@@ -854,6 +978,13 @@ async function bakeTransposedKeyIntoChordPro() {
     preferred_transpose: 0,
     updated_at: new Date().toISOString()
   };
+  // The melody moves with the sheet, so you still sing the same notes.
+  const melodyNow = storedMelody(songAsShown());
+  if (melodyNow) {
+    const { source, confidence } = melodyNow;
+    viewState.melody = { low: melodyNow.low + viewState.semitoneDelta, high: melodyNow.high + viewState.semitoneDelta, key: newKey, source, confidence };
+    updated.layout_prefs = { ...(updated.layout_prefs || {}), melody: viewState.melody };
+  }
 
   activeSong = updated;
   viewState.semitoneDelta = 0;
@@ -1014,6 +1145,7 @@ function renderEditorVocalRangeTip() {
     capo: parseInt(capoInput?.value || "0", 10) || 0,
     preferred_transpose: 0,
     tuning: editingDraft?.tuning,
+    layout_prefs: editingDraft?.layout_prefs,
     chordpro: chordproInput.value || ""
   };
   const rec = getIdealVocalRangeRecommendations(draft, allSongs);
@@ -1026,7 +1158,9 @@ function renderEditorVocalRangeTip() {
   const capoOpt = rec.easyCapo;
   const idealStr = rec.idealLabels.join(", ");
 
-  const statusHeadline = `This sounds in <strong>${esc(rec.currentSoundingKey)}</strong>. Your sweet-spot keys are <strong>${esc(idealStr)}</strong>.`;
+  const statusHeadline = rec.range
+    ? `The melody runs <strong>${esc(rangeText(rec.range.sung))}</strong>; your range is <strong>${esc(rangeText(rec.range.voice))}</strong>.`
+    : `This sounds in <strong>${esc(rec.currentSoundingKey)}</strong>. Your sweet-spot keys are <strong>${esc(idealStr)}</strong>.`;
 
   const actionButtons = [];
   if (pt) {

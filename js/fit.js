@@ -286,20 +286,27 @@ export function markColumnEnds(page) {
   }
 }
 
-/** Prints an exact repeat of a chorus once. A chorus in a new key is not a repeat. */
+/**
+ * When a song won't fit, prints an exact repeat of any part once: "Repeat Chorus",
+ * "Repeat Pre-Chorus", "Repeat Instrumental". A part that changes (a chorus in a new key, new
+ * words) is not a repeat. Tab is left alone. Also embedded in downloaded packets, so it must not
+ * reference anything outside itself.
+ */
 export function collapseRepeatedChoruses(pages) {
   const seen = new Set();
   let changed = false;
   for (const page of pages) {
-    for (const section of page.querySelectorAll(".song-section.is-chorus")) {
+    for (const section of page.querySelectorAll(".song-section:not(.type-tab)")) {
       const lines = section.querySelector(".section-lines");
       const rows = lines ? Array.from(lines.querySelectorAll(".lyric-line")) : [];
       if (!rows.length) continue;
-      const signature = rows.map((row) => row.textContent).join("\n");
+      const label = (section.querySelector(".section-label")?.textContent || "").replace(/\s*\(\d+x\)\s*$/i, "").trim();
+      const kind = section.classList.contains("is-chorus") ? "Chorus" : label.replace(/\s*\d+$/, "");
+      const signature = kind + "\n" + rows.map((row) => row.textContent).join("\n");
       if (seen.has(signature)) {
         const reminder = page.ownerDocument.createElement("div");
         reminder.className = "song-comment";
-        reminder.textContent = "Repeat Chorus";
+        reminder.textContent = "Repeat " + kind;
         lines.replaceChildren(reminder);
         changed = true;
       } else {

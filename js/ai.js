@@ -497,3 +497,33 @@ function fileToBase64(file) {
     reader.readAsDataURL(file);
   });
 }
+
+/**
+ * Ask the AI for each song's lowest and highest sung notes, from its best-known recording.
+ * Only titles, artists, and keys are sent. Resolves to { melodies: [{ id, recording_key, low,
+ * high, confidence }], unknownIds } or { error }.
+ */
+export async function lookUpMelodyRanges(songList) {
+  const sb = getCloud();
+  if (!sb) return { error: "Sign in first to use this" };
+  const melodies = [];
+  const unknownIds = [];
+  for (let i = 0; i < songList.length; i += 25) {
+    const batch = songList.slice(i, i + 25).map((s) => ({ id: s.id, title: s.title, artist: s.artist || "", key: s.key || "" }));
+    try {
+      const { data, error } = await sb.functions.invoke("import-sheet", { body: { type: "melody", songs: batch } });
+      if (error) return { error: await edgeErrorText(error), melodies, unknownIds };
+      // The server answers this until the updated import-sheet function is deployed.
+      if (/unsupported import type/i.test(data?.error || "")) return { error: "Melody lookup isn’t on the server yet", melodies, unknownIds };
+      if (data?.error) return { error: data.error.replace(/\.$/, ""), melodies, unknownIds };
+      const got = Array.isArray(data?.melodies) ? data.melodies : [];
+      melodies.push(...got);
+      const found = new Set(got.map((m) => m.id));
+      unknownIds.push(...batch.filter((b) => !found.has(b.id)).map((b) => b.id));
+    } catch (err) {
+      console.error("Melody lookup failed:", err);
+      return { error: "Couldn’t reach the AI", melodies, unknownIds };
+    }
+  }
+  return { melodies, unknownIds };
+}

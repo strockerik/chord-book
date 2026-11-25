@@ -36,8 +36,9 @@ import {
   getDeviceProfile,
   setDeviceOverride
 } from "./device.js";
-import { initSongController, openSongView, openSongEditor, getActiveSong, showEmptySongStage } from "./song.js";
-import { initImportModal } from "./ai.js";
+import { initSongController, openSongView, openSongEditor, getActiveSong, showEmptySongStage, applyMelodyToOpenSong } from "./song.js";
+import { initImportModal, lookUpMelodyRanges } from "./ai.js";
+import { melodyFromRecording, storedMelody, songsMissingMelody, getVocalRange, setManualVocalRange } from "./melody.js";
 import { initPerformanceControls } from "./perform.js";
 import { loadSetlists, renderSetlistsSheetHTML, getSetlistItems } from "./setlists.js";
 
@@ -99,6 +100,7 @@ export async function saveSong(songObj, { isUpdate = false } = {}) {
 
   const sb = getCloud();
   if (!sb) return;
+  if (idx < 0 && !storedMelody(songObj)) queueMelodyLookup(songObj.id);
   try {
     if (isUpdate && idx >= 0) {
       const { error } = await sb.from("cb_songs").update(songObj).eq("id", songObj.id);
@@ -110,6 +112,52 @@ export async function saveSong(songObj, { isUpdate = false } = {}) {
   } catch {
     queueOfflineWrite({ type: isUpdate ? "update_song" : "insert_song", row: songObj });
   }
+}
+
+// A new song's melody range is looked up a moment after it is added, in one call for a whole
+// set list, without holding anything up.
+const melodyQueue = new Set();
+let melodyTimer = null;
+function queueMelodyLookup(id) {
+  melodyQueue.add(id);
+  clearTimeout(melodyTimer);
+  melodyTimer = setTimeout(() => {
+    const ids = new Set(melodyQueue);
+    melodyQueue.clear();
+    findMelodyRanges(songs.filter((s) => ids.has(s.id)), { quiet: true });
+  }, 2500);
+}
+
+/** Look up and save the melody range of each song. Resolves to { found, unknown, error }. */
+export async function findMelodyRanges(list, { quiet = false } = {}) {
+  const targets = list.filter((s) => s?.id && s.title);
+  if (!targets.length) return { found: 0, unknown: 0 };
+  const res = await lookUpMelodyRanges(targets);
+  let found = 0;
+  for (const m of res.melodies || []) {
+    const cur = songs.find((s) => s.id === m.id);
+    if (!cur) continue;
+    const melody = melodyFromRecording(cur, m);
+    const prefs = { ...(cur.layout_prefs || {}), melody };
+    delete prefs.melody_unknown;
+    await saveSong({ ...cur, layout_prefs: prefs }, { isUpdate: true });
+    // The open song keeps its own copy, so its next save keeps the range too.
+    applyMelodyToOpenSong(cur.id, melody);
+    found++;
+  }
+  // Songs the AI doesn't know aren't asked about again automatically.
+  for (const id of res.unknownIds || []) {
+    const cur = songs.find((s) => s.id === id);
+    if (cur && !storedMelody(cur)) await saveSong({ ...cur, layout_prefs: { ...(cur.layout_prefs || {}), melody_unknown: true } }, { isUpdate: true });
+  }
+  const unknown = (res.unknownIds || []).length;
+  if (res.error) {
+    if (!quiet) toastError(res.error);
+    else console.warn("Melody lookup:", res.error);
+  } else if (!quiet) {
+    toast(`Found the melody range for ${found} song${found === 1 ? "" : "s"}${unknown ? `. The AI doesn’t know ${unknown}; set those under More` : ""}.`);
+  }
+  return { found, unknown, error: res.error || null };
 }
 
 export async function deleteSongWithUndo(songObj) {
@@ -660,7 +708,7 @@ async function bootApp() {
       if (!body) return;
       body.innerHTML = renderAnalyticsDashboardHTML(songs);
       body.querySelectorAll("[data-open-song]").forEach((row) => {
-        row.addEventListener("click", () => {
+        const open = () => {
           const sid = row.getAttribute("data-open-song");
           const s = songs.find((x) => x.id === sid);
           if (s) {
@@ -668,7 +716,47 @@ async function bootApp() {
             openSongView(s);
             renderLibrarySidebar();
           }
+        };
+        row.addEventListener("click", open);
+        row.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            open();
+          }
         });
+      });
+      const lowPick = body.querySelector("#vocal-range-low");
+      const highPick = body.querySelector("#vocal-range-high");
+      const onRangePick = () => {
+        const low = parseInt(lowPick.value, 10);
+        const high = parseInt(highPick.value, 10);
+        if (!lowPick.value || !highPick.value) {
+          // "Auto" on either goes back to the range your songs show.
+          if (!lowPick.value && !highPick.value) setManualVocalRange(null);
+          else {
+            // One note picked: fill the other from your songs, or wait for it.
+            const auto = getVocalRange(songs);
+            if (auto && auto.from === "songs") setManualVocalRange({ low: lowPick.value ? low : auto.low, high: highPick.value ? high : auto.high });
+            else return;
+          }
+        } else if (high <= low) {
+          toastError("Pick a highest note above the lowest.");
+          return;
+        } else {
+          setManualVocalRange({ low, high });
+        }
+        renderAnalyticsModal();
+        const active = getActiveSong();
+        if (active) openSongView(active);
+      };
+      lowPick?.addEventListener("change", onRangePick);
+      highPick?.addEventListener("change", onRangePick);
+      body.querySelector("#find-melody-ranges-btn")?.addEventListener("click", async (ev) => {
+        const btn = ev.currentTarget;
+        btn.disabled = true;
+        btn.textContent = "Looking up…";
+        await findMelodyRanges(songsMissingMelody(songs));
+        renderAnalyticsModal();
       });
       body.querySelectorAll("[data-toggle-ideal-key]").forEach((chip) => {
         chip.addEventListener("click", () => {

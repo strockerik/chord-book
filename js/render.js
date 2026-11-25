@@ -218,6 +218,15 @@ export function renderSectionHTML(sec, secIdx, opts = {}) {
     }
 
     // Default: "above" — inline-block columns where each {chord, lyric} pair stays together across line wraps
+    // A chord-only line ending in a count ("[D]   [G] (x2)") shows the count beside the chords,
+    // not as a lyric underneath.
+    let repeatMark = "";
+    const lyricOnly = line.segments.map((s) => s.lyric || "").join("").trim();
+    const count = line.segments.some((s) => s.chord) && lyricOnly.match(/^\(?\s*(?:x\s*(\d+)|(\d+)\s*x)\s*\)?$/i);
+    if (count) {
+      repeatMark = `×${count[1] || count[2]}`;
+      line = { ...line, segments: line.segments.map((s) => ({ ...s, lyric: s.chord ? "   " : "" })).filter((s) => s.chord) };
+    }
     const hasAnyLyric = line.segments.some((s) => (s.lyric || "").trim().length > 0);
     // Build the line from pieces so it can only wrap between whole words, never inside one.
     const pieces = [];
@@ -299,7 +308,7 @@ export function renderSectionHTML(sec, secIdx, opts = {}) {
     if (wordRun.length) segHtml.push(wordRun.join(""));
 
     linesHtml.push(
-      `<div class="lyric-line${hasAnyLyric ? "" : " is-instrumental-line"}" data-line="${secIdx}-${lineIdx}">${segHtml.join("")}</div>`
+      `<div class="lyric-line${hasAnyLyric ? "" : " is-instrumental-line"}" data-line="${secIdx}-${lineIdx}">${segHtml.join("")}${repeatMark ? `<span class="repeat-mark">${repeatMark}</span>` : ""}</div>`
     );
   });
 
