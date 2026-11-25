@@ -425,18 +425,24 @@ function realignToLayout(
   // The same words can come back with different chords ("Boys like you…" over Bm, then over G),
   // so each source line is used once, in order.
   const used = new Map<string, number>();
-  const take = (key: string, chordCount: number | null): string | null => {
+  // A source line may replace the AI's line only when its chords agree: the same names, or the
+  // same roots spelled differently (A2 / Aadd9). The same words in a new key (a chorus that
+  // modulates) are a different line, never a match.
+  const semis: Record<string, number> = { C: 0, "B#": 0, "C#": 1, Db: 1, D: 2, "D#": 3, Eb: 3, E: 4, Fb: 4, F: 5, "E#": 5, "F#": 6, Gb: 6, G: 7, "G#": 8, Ab: 8, A: 9, "A#": 10, Bb: 10, B: 11, Cb: 11 };
+  const root = (c: string) => semis[(c.match(/^[A-G][#b]?/) || [""])[0]] ?? -1;
+  const sameNames = (a: string[], b: string[]) => a.length === b.length && a.every((c, i) => c === b[i]);
+  const sameRoots = (a: string[], b: string[]) =>
+    a.length === b.length && a.filter((c, i) => root(c) === root(b[i])).length * 2 >= a.length;
+  const take = (key: string, mine: string[]): string | null => {
     const candidates = byWords.get(key);
     if (!candidates) return null;
-    let next = used.get(key) ?? 0;
-    while (next < candidates.length && chordCount !== null && chordList(candidates[next]).length !== chordCount) next++;
-    // A chorus printed once but sung again in the source: start over at its first copy.
-    if (next >= candidates.length) {
-      next = candidates.findIndex((c) => chordCount === null || chordList(c).length === chordCount);
-      if (next < 0) return null;
-    }
-    used.set(key, next + 1);
-    return candidates[next];
+    const from = used.get(key) ?? 0;
+    const pick = (i: number) => { used.set(key, i + 1); return candidates[i]; };
+    for (let i = from; i < candidates.length; i++) if (sameNames(chordList(candidates[i]), mine)) return pick(i);
+    // A chorus printed once but sung again in the source: an earlier copy with the same chords.
+    for (let i = 0; i < from; i++) if (sameNames(chordList(candidates[i]), mine)) return candidates[i];
+    for (let i = from; i < candidates.length; i++) if (sameRoots(chordList(candidates[i]), mine)) return pick(i);
+    return null;
   };
   // Source lines in order, for lines the AI joined or split.
   const ordered = layout.filter((l) => chordList(l).length && chordList(l).every(isValidChord)).map((l) => ({ text: l, key: wordsKey(l) }));
@@ -448,7 +454,7 @@ function realignToLayout(
       const line = sec.lines[i];
       if (line.tab || typeof line.text !== "string") { out.push(line); continue; }
       const key = wordsKey(line.text);
-      const exact = take(key, chordList(line.text).length);
+      const exact = take(key, chordList(line.text));
       if (exact) {
         if (exact !== line.text) changed++;
         out.push({ ...line, text: exact });
@@ -894,6 +900,7 @@ READ THE MESS:
 - If the input holds more than one song, transcribe only the first one and list the others in other_songs.
 
 KEEP IT FAITHFUL:
+- Only use chords that are in the input. Never fill in a song from memory.
 - Never change, add, or simplify chords, and copy each chord name exactly as written: A2 stays A2, Esus stays Esus. Never rewrite lyrics. Keep backing vocals in parentheses as their own lines.
 - A dashed chord run like "A/C#-D" means quick changes: write it as "[A/C#] [D]".
 - "G (hold)" means hold that chord: put [G] on the next word and keep "(hold)" right after it.
@@ -905,7 +912,7 @@ KEEP IT FAITHFUL:
 
 ORGANIZE IT:
 - One section per part, in the order it is played, labeled Intro, Verse 1, Verse 2, Pre-Chorus, Chorus, Bridge, Outro, or Interlude. Always call the chorus "Chorus", never "Refrain".
-- Write the chorus out in full the first time. Each later time it is played, add a section of type "chorus_repeat" with no lines. Do this for "(Repeat Chorus)" notes too.
+- Write the chorus out in full the first time. Each later time it is played with the same chords and words, add a section of type "chorus_repeat" with no lines. Do this for "(Repeat Chorus)" notes too. A chorus that comes back in a new key or with different words or chords is not a repeat: write it out in full with its own chords, labeled like "Chorus in D".
 - When a whole section repeats, put the count in its label: "Bridge (2x)". When only some lines repeat, add a line "(Repeat 4x)" after them.
 - Notes after a section name, like "Intro: ... Palm muted" or "Verse 1: Bass will enter", become that section's sidebar_note. Chords written after "Intro:" become the intro's chord line.
 - Keep the source's line breaks where it has real lines. Rebuild lines only for phone copies that split them apart. A sung line longer than about 40 characters is easier to read while playing, so break it at a natural phrase.
@@ -1071,6 +1078,13 @@ Deno.serve(async (req: Request) => {
     layout = layoutFromSourceText(pageText, isValidChordToken);
     withSource = layout.length < 3;
     if (withSource) layout = [];
+    // A page with no chords on it (a paid "Official" version, a sign-in wall, a video page)
+    // would leave the AI to fill the song in from memory. Say so instead, before any cost.
+    const chordLines = pageText.split("\n").filter((l) => chordColumns(l, isValidChordToken)).length;
+    const inlineChords = (pageText.match(/\[[A-G][#b]?[^\]\s]{0,8}\]/g) || []).length;
+    if (chordLines < 4 && inlineChords < 6) {
+      return json({ error: "That page doesn’t show the chords. It may be a paid or sign-in version. Open the free Chords version and share that link, or copy the chords and paste them." });
+    }
     model = MODEL_TEXT;
   } else {
     return json({ error: "Unsupported import type." });

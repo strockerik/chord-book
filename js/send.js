@@ -891,10 +891,27 @@ function fitPrintPages(doc, ladder, collapse, targetPt, minPt) {
           pill.querySelector("strong").textContent = (i + 1) + "/" + group.length;
         }
       });
+      // Tab gets the full page width, never a column, sized so its longest line fills it.
+      const hasTab = group.some((page) => page.querySelector(".tab-block"));
+      // One size for every tab block in the song: the widest block fills the page width.
+      const sizeTabs = () => {
+        const blocks = group.flatMap((page) => Array.from(page.querySelectorAll(".tab-block")));
+        let best = Infinity;
+        for (const pre of blocks) {
+          pre.style.fontSize = "";
+          const style = doc.defaultView.getComputedStyle(pre);
+          const available = pre.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+          const used = (pre.querySelector("code") || pre).getBoundingClientRect().width;
+          if (available > 0 && used > 0) best = Math.min(best, parseFloat(style.fontSize) * (available / used) * 0.98);
+        }
+        if (!Number.isFinite(best)) return;
+        const px = Math.max(8 * 4 / 3, Math.min(15 * 4 / 3, best)).toFixed(2) + "px";
+        for (const pre of blocks) pre.style.fontSize = px;
+      };
       result = ladder({
         targetPt,
         minPt,
-        columnChoices: [1, 2],
+        columnChoices: hasTab ? [1] : [1, 2],
         setType: (pt, spacing) => {
           for (const page of group) {
             page.style.setProperty("--sheet-font-size", pt.toFixed(2) + "pt");
@@ -904,7 +921,7 @@ function fitPrintPages(doc, ladder, collapse, targetPt, minPt) {
           }
         },
         setLayout: (cols, wrap) => group.forEach((page, i) => layoutPage(page, buckets[i], cols, wrap)),
-        fits: () => group.every(pageFits),
+        fits: () => { sizeTabs(); return group.every(pageFits); },
         collapseRepeats: () => collapse(group)
       });
       if (result.fits) break;

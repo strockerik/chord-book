@@ -645,11 +645,13 @@ function renderSmartAdvisorBanner(parsed, currentShapesKey, soundingKey) {
   const bestOpenCapo = capoSuggestions.find((c) => c.capo > 0 && c.score > 80);
 
   const tips = [];
+  // A song outside your sweet-spot keys gets an offer to rewrite it in the nearest one, shown
+  // alongside the easier-chords idea rather than instead of it.
   if (rec && !rec.isAlreadyIdeal && rec.pureTranspose) {
     const pt = rec.pureTranspose;
     const capoOpt = rec.easyCapo;
     const btns = [
-      `<button type="button" class="advisor-apply-btn" id="apply-ideal-transpose-btn">${esc(pt.label)}</button>`
+      `<button type="button" class="advisor-apply-btn" id="apply-ideal-transpose-btn">Rewrite in ${esc(pt.targetShapesKey)}</button>`
     ];
     if (capoOpt) {
       btns.push(
@@ -657,9 +659,10 @@ function renderSmartAdvisorBanner(parsed, currentShapesKey, soundingKey) {
       );
     }
     tips.push(
-      `<span><strong>Better for your voice:</strong> this sounds in ${esc(soundingKey)}. Your best keys are ${esc(rec.idealLabels.join(", "))}. ${btns.join(" ")}</span>`
+      `<span><strong>Better for your voice:</strong> this sounds in ${esc(soundingKey)}. Your sweet-spot keys are ${esc(rec.idealLabels.join(", "))}. ${btns.join(" ")}</span>`
     );
-  } else if (bestOpenCapo && bestOpenCapo.capo !== viewState.capo && viewState.capo === 0) {
+  }
+  if (bestOpenCapo && bestOpenCapo.capo !== viewState.capo && viewState.capo === 0) {
     tips.push(
       `<span><strong>Easier chords:</strong> capo ${bestOpenCapo.capo} with ${esc(bestOpenCapo.shapesKey)} shapes keeps it in ${esc(soundingKey)}. <button type="button" class="advisor-apply-btn" id="apply-capo-tip-btn">Use capo ${bestOpenCapo.capo}</button></span>`
     );
@@ -673,13 +676,17 @@ function renderSmartAdvisorBanner(parsed, currentShapesKey, soundingKey) {
   banner.innerHTML = `<div class="advisor-text">${tips.join(" • ")}</div>`;
 
   if (rec?.pureTranspose) {
-    document.getElementById("apply-ideal-transpose-btn")?.addEventListener("click", () => {
+    // Rewrites the sheet itself in the new key (with Undo), like "Rewrite in this key".
+    document.getElementById("apply-ideal-transpose-btn")?.addEventListener("click", async () => {
       closeSheet("song-more-modal");
       viewState.semitoneDelta = rec.pureTranspose.semitoneShiftFromWritten;
       viewState.capo = 0;
-      viewState.isDirty = true;
-      refreshSongView();
-      toast(`Transposed to ${rec.pureTranspose.targetSoundingKey} (your ideal vocal range)`);
+      if (viewState.semitoneDelta === 0) {
+        viewState.isDirty = true;
+        refreshSongView();
+        return;
+      }
+      await bakeTransposedKeyIntoChordPro();
     });
   }
   if (rec?.easyCapo) {
@@ -1000,12 +1007,12 @@ function renderEditorVocalRangeTip() {
   const capoOpt = rec.easyCapo;
   const idealStr = rec.idealLabels.join(", ");
 
-  const statusHeadline = `This sounds in <strong>${esc(rec.currentSoundingKey)}</strong>. Your best keys are <strong>${esc(idealStr)}</strong>.`;
+  const statusHeadline = `This sounds in <strong>${esc(rec.currentSoundingKey)}</strong>. Your sweet-spot keys are <strong>${esc(idealStr)}</strong>.`;
 
   const actionButtons = [];
   if (pt) {
     actionButtons.push(
-      `<button type="button" class="solid-btn small-btn" id="editor-apply-ideal-transpose">${esc(pt.label)}</button>`
+      `<button type="button" class="solid-btn small-btn" id="editor-apply-ideal-transpose">Rewrite in ${esc(pt.targetShapesKey)}</button>`
     );
   }
   if (capoOpt) {

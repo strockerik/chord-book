@@ -109,7 +109,9 @@ export function renderAndFitSong(containerEl, songRow, viewOpts = {}) {
 
   // Mode 2: Letter pages. A long song continues onto another page instead of being squeezed.
   const minPages = pageMode === "2-sheet" ? 2 : 1;
-  const maxPages = Math.max(minPages, Math.min(MAX_SHEET_PAGES, sectionsToRender.length));
+  // Tab is learned, not sung from, so a tab-heavy song may run longer.
+  const hasTab = sectionsToRender.some((item) => (item.sec.lines || []).some((l) => l.tab !== undefined));
+  const maxPages = Math.max(minPages, Math.min(hasTab ? MAX_TAB_SHEET_PAGES : MAX_SHEET_PAGES, sectionsToRender.length));
   containerEl.className = `song-stage mode-sheet mode-${minPages}-sheet`;
 
   let pageBuckets = [];
@@ -135,7 +137,8 @@ export function renderAndFitSong(containerEl, songRow, viewOpts = {}) {
       columnsPref,
       fontOffset,
       canCollapse: !viewOpts.alignMode,
-      onOverflow: () => renderAndFitSong(containerEl, songRow, viewOpts)
+      // Redraw once after web fonts load; a song that still can't fit must not redraw forever.
+      onOverflow: viewOpts.refitAfterFonts ? null : () => renderAndFitSong(containerEl, songRow, { ...viewOpts, refitAfterFonts: true })
     });
     if (fitResult.fits) break;
   }
@@ -152,7 +155,9 @@ export function renderAndFitSong(containerEl, songRow, viewOpts = {}) {
 function splitSectionsIntoPages(sections, count) {
   const pageCount = Math.min(count, Math.max(1, sections.length));
   if (pageCount <= 1) return [sections];
-  const weights = sections.map((s) => Math.max(2, (s.sec.lines || []).length) + 1 + (s.sec.sidebarNote ? 1 : 0));
+  // A tab block is one "line" holding many rows; count its rows so pages split evenly.
+  const rows = (sec) => (sec.lines || []).reduce((n, l) => n + (l.tab !== undefined ? String(l.tab).split("\n").length : 1), 0);
+  const weights = sections.map((s) => Math.max(2, rows(s.sec)) + 1 + (s.sec.sidebarNote ? 1 : 0));
   const total = weights.reduce((sum, w) => sum + w, 0);
   const pages = [];
   let start = 0;
@@ -179,6 +184,7 @@ export const STANDARD_SHEET_PT = 11;
 // Read while playing and singing: text stops here, then the song continues on another page.
 export const MIN_SHEET_PT = 10.5;
 export const MAX_SHEET_PAGES = 4;
+export const MAX_TAB_SHEET_PAGES = 8;
 
 /**
  * Finds the first layout that fits, in order of least change to how the sheet reads:
@@ -216,6 +222,28 @@ export function fitLadder({ targetPt, minPt, columnChoices, setType, setLayout, 
   setType(minPt, spacings[1]);
   setLayout(lastCols, true);
   return { pt: minPt, cols: lastCols, wrap: true, fits: false };
+}
+
+/**
+ * Sizes tab so the widest tab block fills the page width (8pt to 15pt), so tab reads as large as
+ * the page allows. Every tab block in the song gets that one size, so the sheet stays consistent.
+ */
+export function fitTabsToWidth(pages) {
+  const blocks = pages.flatMap((p) => Array.from(p.querySelectorAll(".tab-block")));
+  if (!blocks.length) return;
+  let best = Infinity;
+  for (const pre of blocks) {
+    pre.style.fontSize = "";
+    const page = pre.closest(".sheet-page");
+    const scale = page ? page.getBoundingClientRect().width / page.offsetWidth || 1 : 1;
+    const style = getComputedStyle(pre);
+    const available = pre.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const used = (pre.querySelector("code") || pre).getBoundingClientRect().width / scale;
+    if (available > 0 && used > 0) best = Math.min(best, parseFloat(style.fontSize) * (available / used) * 0.98);
+  }
+  if (!Number.isFinite(best)) return;
+  const px = `${Math.max(8 * 4 / 3, Math.min(15 * 4 / 3, best)).toFixed(2)}px`;
+  for (const pre of blocks) pre.style.fontSize = px;
 }
 
 /**
@@ -288,6 +316,7 @@ export function autoFitLetterPages(pageEls, { columnsPref = "auto", fontOffset =
   };
 
   const checkPagesFit = () => {
+    fitTabsToWidth(pageEls);
     for (const p of pageEls) {
       markColumnEnds(p);
       if (p.scrollHeight > p.clientHeight + 1) return false;
@@ -307,7 +336,9 @@ export function autoFitLetterPages(pageEls, { columnsPref = "auto", fontOffset =
     return true;
   };
 
-  const columnChoices = columnsPref === 1 || columnsPref === "1"
+  // Tab is for learning a part, not for singing along: it gets the full page width, never a column.
+  const hasTab = pageEls.some((p) => p.querySelector(".tab-block"));
+  const columnChoices = hasTab || columnsPref === 1 || columnsPref === "1"
     ? [1]
     : (columnsPref === 2 || columnsPref === "2" ? [2] : [1, 2]);
   // A− / A+ on a song moves it off the standard on purpose.
