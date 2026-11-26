@@ -55,7 +55,9 @@ import {
   originalMelody,
   shiftFromOriginal,
   sheetKeyMismatch,
-  melodyAfterKeyFix
+  melodyAfterKeyFix,
+  rangeFromOriginal,
+  canonicalKey
 } from "./melody.js";
 
 let activeSong = null;
@@ -266,7 +268,8 @@ export function initSongController({ onSaveSong, onDeleteSong, getLibrarySongs }
     if (!activeSong || !origEditor) return;
     const o = originalMelody(songAsShown());
     const sung = sungRange(songAsShown());
-    if (origKey) origKey.value = o?.key || normalizeKeyName(activeSong.key || "G");
+    // The list uses one spelling per key (F#, not Gb); show the AI's key in that spelling.
+    if (origKey) origKey.value = canonicalKey(o?.key) || canonicalKey(activeSong.key) || "G";
     if (origLow) origLow.value = String(o?.low ?? sung?.low ?? "");
     if (origHigh) origHigh.value = String(o?.high ?? sung?.high ?? "");
     origEditor.hidden = false;
@@ -278,6 +281,10 @@ export function initSongController({ onSaveSong, onDeleteSong, getLibrarySongs }
     if (!activeSong) return;
     const low = parseInt(origLow?.value || "", 10);
     const high = parseInt(origHigh?.value || "", 10);
+    if (!origKey?.value) {
+      toastError("Pick the original recording’s key.");
+      return;
+    }
     if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) {
       toastError("Pick a highest note above the lowest.");
       return;
@@ -286,7 +293,7 @@ export function initSongController({ onSaveSong, onDeleteSong, getLibrarySongs }
     const current = viewState.melody;
     const fromOriginal = melodyFromRecording(shown, { recording_key: origKey?.value, low, high, confidence: null }, "you");
     // A range you set for this sheet stays yours; otherwise it's worked out again from the original.
-    viewState.melody = current?.source === "you" && storedMelody(shown)
+    viewState.melody = current && !rangeFromOriginal(current) && storedMelody(shown)
       ? { ...current, original: fromOriginal.original, recording_key: fromOriginal.recording_key }
       : fromOriginal;
     if (origEditor) origEditor.hidden = true;
@@ -599,6 +606,11 @@ export function openSongView(song, { discardPending = false } = {}) {
   }
   document.body.classList.remove("no-song");
   const isDifferentSong = activeSong?.id !== song.id;
+  // An unsaved edit of one song's original recording doesn't follow you to another song.
+  if (isDifferentSong) {
+    const origEditor = document.getElementById("melody-original-editor");
+    if (origEditor) origEditor.hidden = true;
+  }
   activeSong = song;
   saveLocal("last_song_id", song.id);
   // The phone song list hides the sheet, so close it before the sheet is measured.

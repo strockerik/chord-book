@@ -3,6 +3,10 @@
 // in js/core.js (testing-skills/melody_test.py checks it). Add a line here with every release.
 
 export const REVISIONS = [
+  { version: "0.7.2", date: "2026-11-26", notes: [
+    "Editing the original recording shows the AI’s key in any spelling (Gb appears as F#), and the editor closes when you switch songs.",
+    "Fixing a key label recalculates the range from the original whenever it came from the original, including one you entered yourself."
+  ] },
   { version: "0.7.1", date: "2026-11-26", notes: [
     "Each song keeps the original recording’s key and notes next to this sheet’s range (More → Singing and tuning), so you can check the AI and fix it.",
     "Melody lookups use the key a recording actually sounds in: a song played half a step down is no longer off by a half step.",

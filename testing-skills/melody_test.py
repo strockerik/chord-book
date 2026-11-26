@@ -154,6 +154,18 @@ const fixedSong = { ...wrongLabel, key: "Am", layout_prefs: { melody: fixedMelod
 ok("Fixing a wrong key label works the range out again from the original",
    m.sungRange(fixedSong).low === 52 && m.originalMelody(fixedSong).low === 55, JSON.stringify(m.sungRange(fixedSong)));
 
+// Review follow-ups.
+ok("Any spelling of a key maps to the one the key picker lists",
+   m.canonicalKey("Gb") === "F#" && m.canonicalKey("D#m") === "Ebm" && m.canonicalKey("A#m") === "Bbm" && m.canonicalKey("Abm") === "G#m" && m.canonicalKey("C#") === "Db");
+const yourOriginal = { ...wrongLabel, layout_prefs: { melody: m.melodyFromRecording(wrongLabel, { recording_key: "Cm", low: 55, high: 67 }, "you") } };
+const afterYours = { ...yourOriginal, key: "Am", layout_prefs: { melody: m.melodyAfterKeyFix(yourOriginal, "Am") } };
+ok("Fixing the key after you entered the original works the range out again from it",
+   m.sungRange(afterYours).low === 52 && m.originalMelody(afterYours).source === "you", JSON.stringify(m.sungRange(afterYours)));
+const handNotes = { ...wrongLabel, layout_prefs: { melody: m.melodyFromSung(wrongLabel, 50, 62) } };
+const afterHand = { ...handNotes, key: "Am", layout_prefs: { melody: m.melodyAfterKeyFix(handNotes, "Am") } };
+ok("Fixing the key keeps notes you set on this sheet by hand",
+   m.sungRange(afterHand).low === 50 && m.sungRange(afterHand).high === 62, JSON.stringify(m.sungRange(afterHand)));
+
 document.getElementById("out").textContent = JSON.stringify(results);
 """
 

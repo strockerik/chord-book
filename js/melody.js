@@ -5,7 +5,8 @@
 // tuning move them along with the chords:
 //   { low: 45, high: 64, key: "G", source: "ai" | "you", confidence?: "high"|"medium"|"low",
 //     recording_key?: "A",
-//     original?: { key: "A", low: 47, high: 66, source: "ai" | "you", confidence } }
+//     original?: { key: "A", low: 47, high: 66, source: "ai" | "you", confidence },
+//     from?: "original" | "sheet" }   (worked out from the original, or set on this sheet)
 // `low`/`high`/`key` are the one saved source for this sheet; what you sing now is worked out from
 // them (sungRange), never saved separately. `original` is the recording's own key and notes in
 // concert pitch, kept as a reference that never moves when the sheet is transposed or rewritten.
@@ -13,7 +14,7 @@
 // song an octave down), so fitting a song to a voice tries the octave above and below too.
 
 import { loadLocal, saveLocal } from "./core.js";
-import { NOTE_TO_PITCH, normalizeKeyName, transposeKey, getTuning, getKeyCenter, parseChord, inferKeyFromChords } from "./chords.js";
+import { NOTE_TO_PITCH, ALL_MAJOR_KEYS, ALL_MINOR_KEYS, normalizeKeyName, transposeKey, getTuning, getKeyCenter, parseChord, inferKeyFromChords } from "./chords.js";
 import { parse } from "./chordpro.js";
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -91,7 +92,7 @@ export function sungRange(song) {
 /** A melody you sing on `low`..`high` right now, saved against the written key. */
 export function melodyFromSung(song, low, high, source = "you") {
   const shift = soundingShift(song);
-  const melody = { low: low - shift, high: high - shift, key: sheetBasics(song).writtenKey, source };
+  const melody = { low: low - shift, high: high - shift, key: sheetBasics(song).writtenKey, source, from: "sheet" };
   // Correcting this sheet's notes by hand doesn't change the original recording.
   const prev = song?.layout_prefs?.melody;
   if (prev?.recording_key) melody.recording_key = prev.recording_key;
@@ -117,8 +118,24 @@ export function melodyFromRecording(song, { recording_key, low, high, confidence
     confidence: confidence || null,
     recording_key: key,
     // The recording as the AI (or you) gave it: the reference that never moves.
-    original: key ? { key, low, high, source, confidence: confidence || null } : null
+    original: key ? { key, low, high, source, confidence: confidence || null } : null,
+    from: "original"
   };
+}
+
+/** Whether this sheet's range was worked out from the original (not set on the sheet by hand). */
+export function rangeFromOriginal(melody) {
+  if (!melody) return false;
+  // Ranges saved before `from` existed: AI ones came from the recording, yours from the sheet.
+  return melody.from ? melody.from === "original" : (melody.source || "ai") !== "you";
+}
+
+/** The spelling the key lists use (Gb → F#, D#m → Ebm), so a picker can show any key the AI sends. */
+export function canonicalKey(key) {
+  const norm = normalizeKeyName(key || "");
+  const pitch = NOTE_TO_PITCH[norm.replace(/m$/, "")];
+  if (pitch == null) return null;
+  return norm.endsWith("m") ? ALL_MINOR_KEYS[pitch] : ALL_MAJOR_KEYS[pitch];
 }
 
 /** Half steps from the original recording to what you sing on this sheet now, or null. */
@@ -198,7 +215,11 @@ export function melodyAfterKeyFix(song, newKey) {
   if (!m) return null;
   const fixed = { ...song, key: newKey };
   const o = originalMelody(song);
-  if (o && m.source !== "you") return melodyFromRecording(fixed, { recording_key: o.key, low: o.low, high: o.high, confidence: o.confidence }, o.source);
+  // Worked out from the original (by the AI or from an original you entered): work it out again.
+  if (o && rangeFromOriginal(m)) {
+    return { ...melodyFromRecording(fixed, { recording_key: o.key, low: o.low, high: o.high, confidence: o.confidence }, m.source || o.source), original: m.original };
+  }
+  // Notes you set on this sheet: you still sing the same notes.
   const now = sungRange(song);
   return now ? { ...melodyFromSung(fixed, now.low, now.high, m.source || "you"), source: m.source || "you" } : m;
 }
