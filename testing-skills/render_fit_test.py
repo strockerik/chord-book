@@ -25,6 +25,12 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 
+class ThreadedHTTPServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+    request_queue_size = 64
+
+
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, results_holder=None, **kwargs):
         self.results_holder = results_holder
@@ -64,14 +70,31 @@ __FIXTURE_BOOT__
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const frame = document.getElementById("app-frame");
 
-  // Wait for app inside iframe to finish booting
-  let win, doc;
-  // Boot time varies with machine load; the loop stops as soon as the first sheet appears.
-  for (let i = 0; i < 250; i++) {
-    win = frame.contentWindow;
-    doc = frame.contentDocument;
-    if (doc && doc.querySelector(".sheet-page .cl-pair")) break;
-    await sleep(60);
+  // Wait for iframe document + ES modules to finish loading, then wait for first sheet render.
+  await new Promise((resolve) => {
+    if (frame.contentDocument?.readyState === "complete" && frame.contentWindow?.location?.pathname === "/index.html") {
+      resolve();
+      return;
+    }
+    frame.addEventListener("load", () => resolve(), { once: true });
+  });
+  let win = frame.contentWindow;
+  let doc = frame.contentDocument;
+  const isBootReady = () => !!(doc && doc.querySelector(".sheet-page .cl-pair") && doc.querySelector(".song-list-card.is-selected"));
+  if (!isBootReady()) {
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; obs.disconnect(); resolve(); } };
+      const obs = new MutationObserver(() => { if (isBootReady()) finish(); });
+      if (doc && doc.body) obs.observe(doc.body, { childList: true, subtree: true, attributes: true });
+      (async () => {
+        for (let i = 0; i < 200 && !done; i++) {
+          if (isBootReady()) { finish(); break; }
+          await sleep(25);
+        }
+        finish();
+      })();
+    });
   }
 
   try {
@@ -433,7 +456,7 @@ def main():
     results_holder = {"data": None}
 
     handler = functools.partial(QuietHandler, results_holder=results_holder)
-    httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
+    httpd = ThreadedHTTPServer(("127.0.0.1", 0), handler)
     port = httpd.server_address[1]
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()

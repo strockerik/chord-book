@@ -1,10 +1,20 @@
 // Supabase Edge Function: import-sheet
 //
 // Accepts messy/ugly pasted chord text, 1-6 screenshot snips / camera photos,
-// a PDF document upload, or a public link. Uses Claude Sonnet 4.6 for everything:
-// rebuilding a messy paste into clean lines is the hard part, and imports are rare.
-// Validates output through the Chord Net (every [chord] token parses under
-// the Chord Book grammar; sections non-empty) and repairs once if needed.
+// a PDF document upload, or a public link.
+//
+// Architecture (v0.7.0 — Deterministic-First Track A + Sonnet 5.5 Track B):
+// - Track A (Direct): Clean Ultimate Guitar links (using native `[ch]` tags) and
+//   clean single-song digital text-layer PDFs (keeping section names + chord-only lines)
+//   are built deterministically in code with zero AI lyric rewriting, plus an optional
+//   tiny metadata-only call (no lyrics sent) for tempo/genre/time_signature. Falls back
+//   to Track B whenever the direct parse looks weak or ambiguous.
+// - Track B (AI): Photos, screenshots, scanned/multi-song PDFs, and mangled pastes use
+//   Claude Sonnet 5.5 (`strict: true`, `tool_choice: { type: "auto" }`), dropping
+//   redundant `placement` notes whenever exact source layout exists, and prompt-caching
+//   multi-song PDFs across songs 2..N.
+// - Melody range lookups default to Sonnet 5.5 and can be trialed with Haiku 5.5 via
+//   the optional `CB_MELODY_MODEL` Supabase secret.
 //
 // Request body (JSON):
 //   { type: "text", text: "<pasted text>", layout?: ["[G]lines with exact chord columns"], note?: "<optional steer>" }
@@ -17,15 +27,46 @@
 //   { result: { title, artist, key, capo, tempo, time_signature, tuning, genre, form, chordpro, notes },
 //     results: [every song found; a set list PDF can hold several], missed: songs that couldn't be read }
 // or { error: "..." }
-// The melody type answers { melodies: [{ id, recording_key, low, high, confidence }] }: the lowest
-// and highest sung notes of each song's best-known recording as MIDI numbers (60 = middle C).
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { getDocumentProxy } from "npm:unpdf@0.12.1";
+import { isValidChordToken, validateSheetOutput } from "./chord_net.ts";
+import {
+  TUNING_VALUES,
+  GENRES,
+  NOT_SONG_SECTION,
+  chordColumns,
+  layoutFromSourceText,
+  snapLayoutLine,
+  realignToLayout,
+  restoreChangedChoruses,
+  applyPlacementNotes,
+  collapseWrittenRepeats,
+  sheetToChordPro
+} from "./layout.ts";
+import { pageDataForImport, parseUgDirect } from "./ug.ts";
+import { pdfExtract, parsePdfDirect } from "./pdf.ts";
 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
-const MODEL_TEXT = "claude-sonnet-4-6";
-const MODEL_VISION = "claude-sonnet-4-6";
+const MODEL_TEXT = "claude-sonnet-5-5";
+const MODEL_VISION = "claude-sonnet-5-5";
+// Optional Haiku 5.5 trial for melody lookups: set CB_MELODY_MODEL=claude-haiku-5-5 in Supabase secrets.
+const ALLOWED_MELODY_MODELS = new Set(["claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-4-6"]);
+const envMelodyModel = (Deno.env.get("CB_MELODY_MODEL") || "").trim();
+const MODEL_MELODY = ALLOWED_MELODY_MODELS.has(envMelodyModel) ? envMelodyModel : MODEL_TEXT;
+// Lightweight metadata-only call (no lyrics sent) uses Haiku 5.5 for speed & minimal cost.
+const MODEL_META = "claude-haiku-5-5";
+
+// These calls copy and look things up; they were tuned without extended thinking. Sonnet 5.5 and
+// Haiku 5.5 think by default, and thinking tokens count against max_tokens, so turn it off
+// explicitly: Sonnet 5.5 takes "between_tools" (its no-thinking mode, effort high or below);
+// Haiku 5.5 takes "disabled" (effort high or below; its default is medium). Older models don't
+// think unless asked.
+function noThinking(model: string): Record<string, unknown> {
+  if (model.startsWith("claude-sonnet-5-5")) return { thinking: { type: "between_tools" } };
+  if (model.startsWith("claude-haiku-5-5")) return { thinking: { type: "disabled" } };
+  return {};
+}
+
 const DAILY_IMPORT_LIMIT = 20;
 // Accounts that skip the daily limit (the owner and the test account), set as the Supabase
 // secret CB_UNLIMITED_EMAILS, comma-separated. Kept out of this public file.
@@ -64,741 +105,6 @@ function json(body: unknown) {
     status: 200,
     headers: { ...corsHeaders, "Content-Type": "application/json" }
   });
-}
-
-// ==== CHORD NET ====
-const NOTE_NAMES = new Set([
-  "C", "B#", "C#", "Db", "D", "D#", "Eb", "E", "Fb", "F", "E#",
-  "F#", "Gb", "G", "G#", "Ab", "A", "A#", "Bb", "B", "Cb"
-]);
-const QUALITY_RE = /^(?:maj13|maj11|maj9|maj7|M7|Δ7|Δ|min11|min9|min7b5|min7|min6|min|m13|m11|m9|m7b5|m7|m6|mmaj7|m|-(?:7|9|11)?|dim7|dim|°7|°|ø7|ø|aug7|aug|\+7|\+|sus2sus4|sus4|sus2|sus|add11|add9|add4|add2|7sus4|7sus2|9sus4|13|11|9|7|6\/9|69|6|5|4|2)?(?:(?:\(?[b#](?:5|9|11|13)\)?)*)$/;
-const ROOT_RE = /^([A-G][#b]?)(.*?)(?:\/([A-G][#b]?))?$/;
-
-function isValidChordToken(token: string): boolean {
-  if (!token || typeof token !== "string") return false;
-  const trimmed = token.trim();
-  if (trimmed === "N.C." || trimmed === "NC") return true;
-  const m = trimmed.match(ROOT_RE);
-  if (!m) return false;
-  const [, root, quality, bass] = m;
-  if (!NOTE_NAMES.has(root)) return false;
-  if (bass && !NOTE_NAMES.has(bass)) return false;
-  return QUALITY_RE.test(quality || "");
-}
-
-function validateSheetOutput(sheet: {
-  title?: string;
-  key?: string;
-  capo?: number;
-  sections?: Array<{ type?: string; label?: string | null; lines?: Array<{ text?: string; tab?: boolean }> }>;
-}): string[] {
-  const problems: string[] = [];
-  if (!sheet || typeof sheet !== "object") return ["Missing sheet output"];
-  if (!sheet.title || !String(sheet.title).trim()) problems.push("Missing song title");
-  if (!sheet.key || !isValidChordToken(String(sheet.key).trim())) {
-    problems.push(`Invalid or missing key: ${sheet.key}`);
-  }
-  const sections = Array.isArray(sheet.sections) ? sheet.sections : [];
-  if (sections.length === 0) {
-    problems.push("Sheet has no sections");
-  }
-  let totalLines = 0;
-  const badChords: string[] = [];
-  for (const sec of sections) {
-    const lines = Array.isArray(sec.lines) ? sec.lines : [];
-    if (sec.type === "chorus_repeat") continue;
-    if (lines.length === 0) {
-      problems.push(`Empty section "${sec.label || sec.type || "section"}"`);
-    }
-    for (const l of lines) {
-      totalLines++;
-      const txt = String(l.text || "");
-      if (l.tab) continue;
-      const re = /\[([^\]]+)\]/g;
-      let m;
-      while ((m = re.exec(txt)) !== null) {
-        const tok = m[1].trim();
-        if (!isValidChordToken(tok) && !badChords.includes(tok)) {
-          badChords.push(tok);
-        }
-      }
-    }
-  }
-  if (totalLines > 200) {
-    problems.push(`Too many lines (${totalLines}, max 200)`);
-  }
-  if (badChords.length > 0) {
-    problems.push(`Invalid chord tokens inside brackets: ${badChords.join(", ")}`);
-  }
-  return problems;
-}
-// ==== END CHORD NET ====
-
-const TUNING_VALUES: Record<string, string> = {
-  standard: "E A D G B E",
-  half: "Eb Ab Db Gb Bb Eb",
-  drop_d: "D A D G B E",
-  other: "Other"
-};
-const GENRES = ["worship", "country", "rock", "pop"];
-
-// ==== LAYOUT ====
-// Exact chord placement for imports.
-//
-// The AI is good at reading and organizing a sheet but drifts when it places chords: it tends
-// to slide a chord onto the first word of a line. When the source records where each chord
-// sits, we use that instead:
-//   - PDFs with a text layer: each chord's x position over the lyric line below it.
-//   - Pasted text: the app's own column-exact formatter sends its lines as `layout`.
-// realignToLayout() then swaps in the exact line wherever the AI's line has the same words
-// and the same chords, and leaves everything else as the AI wrote it.
-
-// Helvetica/Arial advance widths (1/1000 em) for printable ASCII, starting at space.
-const WIDTHS = [
-  278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278,
-  556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556,
-  1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778,
-  667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556,
-  333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556,
-  556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584
-];
-function charWidth(ch: string): number {
-  const code = ch.charCodeAt(0);
-  if (code >= 32 && code <= 126) return WIDTHS[code - 32];
-  if (ch === "’" || ch === "‘") return 222;
-  if (ch === "“" || ch === "”") return 333;
-  return 556;
-}
-
-type TextItem = { str: string; x: number; y: number; width: number; size: number; mono: boolean };
-type Glyph = { ch: string; x: number; w: number };
-
-// Spreads an item's measured width over its characters in proportion to typical letter widths.
-// Monospaced text (common in chord PDFs) gets equal widths, which is exact.
-function glyphsOf(item: TextItem): Glyph[] {
-  const chars = [...item.str];
-  const widthOf = (ch: string) => (item.mono ? 1 : charWidth(ch));
-  const units = chars.reduce((sum, ch) => sum + widthOf(ch), 0) || 1;
-  const scale = item.width / units;
-  const out: Glyph[] = [];
-  let x = item.x;
-  for (const ch of chars) {
-    const w = widthOf(ch) * scale;
-    out.push({ ch, x, w });
-    x += w;
-  }
-  return out;
-}
-
-const CHORD_TOKEN = /^(?:[A-G][#b]?(?:maj|min|m|M|dim|aug|sus|add|°|ø|\+)?[0-9]*(?:sus[24]?|add[0-9]+|[b#][0-9]+)*(?:\/[A-G][#b]?)?|N\.?C\.?)$/;
-
-function lineGlyphs(items: TextItem[]): Glyph[] {
-  const glyphs: Glyph[] = [];
-  for (const item of items.sort((a, b) => a.x - b.x)) {
-    const g = glyphsOf(item);
-    if (!g.length) continue;
-    const last = glyphs[glyphs.length - 1];
-    if (last && g[0].x - (last.x + last.w) > item.size * 0.2 && last.ch !== " " && g[0].ch !== " ") {
-      glyphs.push({ ch: " ", x: last.x + last.w, w: g[0].x - (last.x + last.w) });
-    }
-    glyphs.push(...g);
-  }
-  return glyphs;
-}
-
-// Chords in a line, each with the x where it starts. Null when the line isn't all chords.
-type PlacedChord = { chord: string; x: number; dashed?: boolean };
-
-// "Em - D" means both chords share one word: the D goes on the next syllable.
-function chordsOf(glyphs: Glyph[]): PlacedChord[] | null {
-  const out: PlacedChord[] = [];
-  let token = "";
-  let start = 0;
-  let dash = false;
-  const flush = () => {
-    if (!token) return true;
-    const t = token.replace(/^[(\[]+|[)\],]+$/g, "");
-    token = "";
-    if (/^[-–]+$/.test(t)) { dash = out.length > 0; return true; }
-    if (!t || /^[|/.]+$/.test(t) || /^\(?x\d+\)?$|^\d+x$/i.test(t)) return true;
-    if (!CHORD_TOKEN.test(t)) return false;
-    out.push({ chord: t, x: start, dashed: dash });
-    dash = false;
-    return true;
-  };
-  for (const g of glyphs) {
-    if (g.ch === " " || g.ch === "\u00a0") {
-      if (!flush()) return null;
-    } else {
-      if (!token) start = g.x;
-      token += g.ch;
-    }
-  }
-  if (!flush()) return null;
-  return out.length ? out : null;
-}
-
-const VOWEL = /[aeiouy]/i;
-const DIGRAPH = /^(?:sh|ch|th|ph|wh|gh|ck|qu|ng)$/i;
-
-// Where a word can be split into sung syllables: "mea|sure", "on|ly", "Be|hold", "moc|king".
-// Rough rules (V-CV, VC-CV, consonant pairs kept together), and a silent final e is not a syllable.
-function syllableStarts(word: string): number[] {
-  const starts = [0];
-  const w = word.toLowerCase();
-  for (let i = 1; i < w.length - 1; i++) {
-    if (!VOWEL.test(w[i - 1]) || VOWEL.test(w[i]) || !/[a-z]/.test(w[i])) continue;
-    // w[i..j) is a run of consonants between two vowels.
-    let j = i;
-    while (j < w.length && /[a-z]/.test(w[j]) && !VOWEL.test(w[j])) j++;
-    if (j >= w.length || !VOWEL.test(w[j])) { i = j; continue; }
-    const run = w.slice(i, j);
-    // One consonant goes with the next syllable (mea|sure); of two, split them (on|ly),
-    // unless they make one sound (a|shamed); of three, keep the last pair together (com|plished).
-    let cut = run.length === 1 || (run.length === 2 && DIGRAPH.test(run)) ? i : i + 1;
-    if (run.length >= 3 && DIGRAPH.test(run.slice(-2))) cut = j - 2;
-    // A silent final e is not a syllable: ma|ke, the|re, fi|nished stay whole there.
-    if (!/^[^aeiouy]{1,2}e[sd]?$/.test(w.slice(cut))) starts.push(cut);
-    i = j - 1;
-  }
-  return [...new Set(starts)].sort((a, b) => a - b);
-}
-
-// Moves a chord that lands inside a word to the nearest syllable start.
-function snapToSyllable(text: string, i: number): number {
-  if (i >= text.length || !/[A-Za-z']/.test(text[i])) {
-    // Landed on punctuation after a word ("son," -> on "son").
-    if (i > 0 && /[A-Za-z']/.test(text[i - 1] || "")) i--;
-    else return i;
-  }
-  let start = i;
-  while (start > 0 && /[A-Za-z']/.test(text[start - 1])) start--;
-  let end = i;
-  while (end < text.length && /[A-Za-z']/.test(text[end])) end++;
-  const offsets = syllableStarts(text.slice(start, end));
-  const nearest = offsets.reduce((best, o) => (Math.abs(o - (i - start)) < Math.abs(best - (i - start)) ? o : best), 0);
-  return start + nearest;
-}
-
-// Puts each chord on the syllable under its left edge.
-function placeChords(chords: PlacedChord[], lyric: Glyph[]): string {
-  const text = lyric.map((g) => g.ch).join("").replace(/\s+$/, "");
-  const slots = new Map<number, string[]>();
-  let prev = -1;
-  for (const { chord, x, dashed } of chords) {
-    let i = lyric.findIndex((g) => x < g.x + g.w * 0.6);
-    if (i < 0 || i > text.length) i = text.length;
-    // A chord over the gap between words belongs to the next word.
-    while (i < text.length && text[i] === " ") i++;
-    if (i < text.length) i = snapToSyllable(text, i);
-    if (dashed && prev >= 0) {
-      // Next syllable of the word the previous chord is on, when it has one.
-      let start = prev;
-      while (start > 0 && /[A-Za-z']/.test(text[start - 1])) start--;
-      let end = prev;
-      while (end < text.length && /[A-Za-z']/.test(text[end])) end++;
-      const next = syllableStarts(text.slice(start, end)).map((o) => start + o).find((o) => o > prev);
-      if (next !== undefined) i = next;
-    }
-    if (i <= prev) i = prev;
-    slots.set(i, [...(slots.get(i) || []), chord]);
-    prev = i;
-  }
-  let out = "";
-  for (let i = 0; i <= text.length; i++) {
-    const here = slots.get(i) || [];
-    // Chords after the last word are played after it: "name. [A]".
-    out += i === text.length ? here.map((c) => ` [${c}]`).join("") : here.map((c) => `[${c}]`).join("");
-    if (i < text.length) out += text[i];
-  }
-  return out.replace(/\s+/g, " ").trim();
-}
-
-/** Lyric lines with chords placed from the PDF's text layer. Empty if the PDF has no text layer. */
-async function pdfLayoutLines(bytes: Uint8Array, maxPages = 12): Promise<string[]> {
-  const pdf = await getDocumentProxy(bytes);
-  const out: string[] = [];
-  for (let p = 1; p <= Math.min(pdf.numPages, maxPages); p++) {
-    const page = await pdf.getPage(p);
-    const content = await page.getTextContent();
-    // deno-lint-ignore no-explicit-any
-    const styles = (content as any).styles || {};
-    // Screen coordinates (y grows downward), so rotated pages read the same as upright ones.
-    const vp = page.getViewport({ scale: 1 }).transform as number[];
-    const items: TextItem[] = [];
-    // deno-lint-ignore no-explicit-any
-    for (const raw of content.items as any[]) {
-      if (typeof raw.str !== "string" || !raw.str) continue;
-      const [a, b, c, d, e, f] = raw.transform as number[];
-      const m = [
-        vp[0] * a + vp[2] * b, vp[1] * a + vp[3] * b,
-        vp[0] * c + vp[2] * d, vp[1] * c + vp[3] * d,
-        vp[0] * e + vp[2] * f + vp[4], vp[1] * e + vp[3] * f + vp[5]
-      ];
-      items.push({
-        str: raw.str.replace(/\u00a0/g, " "),
-        x: m[4],
-        y: m[5],
-        width: raw.width,
-        size: Math.hypot(m[2], m[3]) || 11,
-        mono: styles[raw.fontName]?.fontFamily === "monospace" || /mono|courier/i.test(String(styles[raw.fontName]?.fontFamily || ""))
-      });
-    }
-    for (const column of splitColumns(items)) out.push(...pairChordsWithLyrics(column));
-  }
-  return out;
-}
-
-// A page set in two columns would otherwise mix chords from one column into the other.
-function splitColumns(items: TextItem[]): TextItem[][] {
-  const words = items.filter((it) => /[a-z]{3}/.test(it.str) && it.width > 30);
-  if (words.length < 6) return [items];
-  const minX = Math.min(...items.map((it) => it.x));
-  const maxX = Math.max(...items.map((it) => it.x + it.width));
-  let best: number | null = null;
-  let bestGap = 0;
-  for (let c = minX + (maxX - minX) * 0.3; c <= minX + (maxX - minX) * 0.7; c += 2) {
-    if (words.some((it) => it.x < c && it.x + it.width > c)) continue;
-    const left = words.filter((it) => it.x + it.width <= c);
-    const right = words.filter((it) => it.x >= c);
-    if (left.length < 3 || right.length < 3) continue;
-    const gap = Math.min(...right.map((it) => it.x)) - Math.max(...left.map((it) => it.x + it.width));
-    if (gap > bestGap) { bestGap = gap; best = Math.max(...left.map((it) => it.x + it.width)) + gap / 2; }
-  }
-  if (best === null) return [items];
-  return [items.filter((it) => it.x < best!), items.filter((it) => it.x >= best!)];
-}
-
-function pairChordsWithLyrics(items: TextItem[]): string[] {
-  const out: string[] = [];
-  const rows = new Map<number, TextItem[]>();
-  for (const item of items) {
-    const key = [...rows.keys()].find((y) => Math.abs(y - item.y) < item.size * 0.3) ?? item.y;
-    rows.set(key, [...(rows.get(key) || []), item]);
-  }
-  {
-    const lines = [...rows.entries()].sort((a, b) => a[0] - b[0]).map(([y, row]) => ({ y, glyphs: lineGlyphs(row), size: row[0].size }));
-    for (let i = 0; i < lines.length - 1; i++) {
-      const chords = chordsOf(lines[i].glyphs);
-      if (!chords) continue;
-      const below = lines[i + 1];
-      const words = below.glyphs.map((g) => g.ch).join("");
-      if (below.y - lines[i].y > lines[i].size * 2.4 || !/[a-z]/.test(words) || chordsOf(below.glyphs)) continue;
-      out.push(placeChords(chords, below.glyphs));
-      i++;
-    }
-  }
-  return out;
-}
-
-const wordsKey = (line: string) =>
-  line.replace(/\[[^\]]*\]/g, "").toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9']+/g, " ").trim();
-const chordList = (line: string) => [...line.matchAll(/\[([^\]]+)\]/g)].map((m) => m[1].trim());
-
-// "[G]Down the [D]river in the morning" split after 3 words -> ["[G]Down the [D]river", "in the morning"].
-function splitAtWord(text: string, words: number): [string, string] {
-  let count = 0;
-  let inWord = false;
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === "[") { const close = text.indexOf("]", i); if (close > i) { i = close; continue; } }
-    const letter = /[A-Za-z0-9']/.test(text[i]);
-    if (letter && !inWord) { inWord = true; count++; if (count === words + 1) return [text.slice(0, i).trim(), text.slice(i).trim()]; }
-    if (!letter && text[i] !== "[") inWord = letter;
-  }
-  return [text, ""];
-}
-
-/**
- * Replaces the AI's chord placement with the exact one from the source wherever both have the
- * same words and the same number of chords. Returns how many lines changed.
- */
-function realignToLayout(
-  sections: Array<{ type?: string; lines?: Array<{ text?: string; tab?: boolean }> }>,
-  layout: string[],
-  isValidChord: (c: string) => boolean
-): number {
-  const byWords = new Map<string, string[]>();
-  for (const line of layout) {
-    const chords = chordList(line);
-    if (!chords.length || !chords.every(isValidChord)) continue;
-    const key = wordsKey(line);
-    if (key.length < 6) continue;
-    byWords.set(key, [...(byWords.get(key) || []), line]);
-  }
-  // The same words can come back with different chords ("Boys like you…" over Bm, then over G),
-  // so each source line is used once, in order.
-  const used = new Map<string, number>();
-  // A source line may replace the AI's line only when its chords agree: the same names, or the
-  // same roots spelled differently (A2 / Aadd9). The same words in a new key (a chorus that
-  // modulates) are a different line, never a match.
-  const semis: Record<string, number> = { C: 0, "B#": 0, "C#": 1, Db: 1, D: 2, "D#": 3, Eb: 3, E: 4, Fb: 4, F: 5, "E#": 5, "F#": 6, Gb: 6, G: 7, "G#": 8, Ab: 8, A: 9, "A#": 10, Bb: 10, B: 11, Cb: 11 };
-  const root = (c: string) => semis[(c.match(/^[A-G][#b]?/) || [""])[0]] ?? -1;
-  const sameNames = (a: string[], b: string[]) => a.length === b.length && a.every((c, i) => c === b[i]);
-  const sameRoots = (a: string[], b: string[]) =>
-    a.length === b.length && a.filter((c, i) => root(c) === root(b[i])).length * 2 >= a.length;
-  const take = (key: string, mine: string[]): string | null => {
-    const candidates = byWords.get(key);
-    if (!candidates) return null;
-    const from = used.get(key) ?? 0;
-    const pick = (i: number) => { used.set(key, i + 1); return candidates[i]; };
-    for (let i = from; i < candidates.length; i++) if (sameNames(chordList(candidates[i]), mine)) return pick(i);
-    // A chorus printed once but sung again in the source: an earlier copy with the same chords.
-    for (let i = 0; i < from; i++) if (sameNames(chordList(candidates[i]), mine)) return candidates[i];
-    for (let i = from; i < candidates.length; i++) if (sameRoots(chordList(candidates[i]), mine)) return pick(i);
-    return null;
-  };
-  // Source lines in order, for lines the AI joined or split.
-  const ordered = layout.filter((l) => chordList(l).length && chordList(l).every(isValidChord)).map((l) => ({ text: l, key: wordsKey(l) }));
-  let changed = 0;
-  for (const sec of sections || []) {
-    if (sec.type === "chorus_repeat" || !Array.isArray(sec.lines)) continue;
-    const out: Array<{ text?: string; tab?: boolean }> = [];
-    for (let i = 0; i < sec.lines.length; i++) {
-      const line = sec.lines[i];
-      if (line.tab || typeof line.text !== "string") { out.push(line); continue; }
-      const key = wordsKey(line.text);
-      const exact = take(key, chordList(line.text));
-      if (exact) {
-        if (exact !== line.text) changed++;
-        out.push({ ...line, text: exact });
-        continue;
-      }
-      // The AI repeated the end of a line ("... let it be, let it be"): the source line wins.
-      const stutter = ordered.find((o) => {
-        if (!key.startsWith(o.key + " ")) return false;
-        const extra = key.slice(o.key.length + 1).split(" ");
-        const words = o.key.split(" ");
-        for (let n = 1; n <= Math.min(4, words.length); n++) {
-          const tail = words.slice(-n);
-          if (extra.length % n === 0 && extra.every((w, j) => w === tail[j % n])) return true;
-        }
-        return false;
-      });
-      if (stutter && sameRoots(chordList(stutter.text), chordList(line.text))) {
-        out.push({ ...line, text: stutter.text });
-        changed++;
-        continue;
-      }
-      // The AI joined two or three source lines into one: put the source lines back.
-      let joined: string[] | null = null;
-      for (let a = 0; a < ordered.length && !joined; a++) {
-        for (let n = 2; n <= 3 && a + n <= ordered.length; n++) {
-          const parts = ordered.slice(a, a + n);
-          if (parts.map((p) => p.key).join(" ") === key) { joined = parts.map((p) => p.text); break; }
-        }
-      }
-      if (joined) {
-        joined.forEach((t) => out.push({ ...line, text: t }));
-        changed++;
-        continue;
-      }
-      // The AI split one source line in two: split the source line at the same word.
-      const nextLine = sec.lines[i + 1];
-      const nextText = nextLine && !nextLine.tab && typeof nextLine.text === "string" ? nextLine.text : null;
-      if (nextLine && nextText !== null) {
-        const firstWords = key.split(" ").length;
-        const whole = ordered.find((o) => o.key === `${key} ${wordsKey(nextText)}`);
-        if (whole) {
-          const [head, tail] = splitAtWord(whole.text, firstWords);
-          out.push({ ...line, text: head }, { ...nextLine, text: tail });
-          i++;
-          changed++;
-          continue;
-        }
-      }
-      out.push(line);
-    }
-    sec.lines = out;
-  }
-  return changed;
-}
-
-// Chord columns in a monospaced chord line, or null when the line isn't all chords.
-function chordColumns(line: string, isValid: (c: string) => boolean): Array<{ chord: string; col: number }> | null {
-  const out: Array<{ chord: string; col: number }> = [];
-  for (const m of line.matchAll(/\S+/g)) {
-    const raw = m[0].replace(/^[(\[]+|[)\],]+$/g, "");
-    if (!raw || /^[-–|/.]+$/.test(raw) || /^\(?x\d+\)?$|^\d+x$/i.test(raw)) continue;
-    // "A/C#-D" is two quick chords.
-    const parts = raw.split(/-(?=[A-G])/);
-    if (!parts.every((c) => isValid(c))) return null;
-    let col = m.index ?? 0;
-    for (const c of parts) { out.push({ chord: c, col }); col += c.length + 1; }
-  }
-  return out.length ? out : null;
-}
-
-/**
- * Lyric lines with chords placed by column from a monospaced, chords-over-lyrics transcription.
- * With keepAll, lines without chords and chord-only lines are kept too, in order.
- */
-function layoutFromSourceText(text: string, isValid: (c: string) => boolean, keepAll = false): string[] {
-  const lines = String(text || "").replace(/\r/g, "").replace(/\t/g, "    ").split("\n");
-  const out: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const chords = chordColumns(lines[i], isValid);
-    if (!chords) {
-      if (keepAll && /[a-z]/i.test(lines[i]) && !SOURCE_HEADER.test(lines[i])) out.push(lines[i].trim().replace(/\s+/g, " "));
-      continue;
-    }
-    const lyric = lines[i + 1] ?? "";
-    if (!/[a-z]/i.test(lyric) || chordColumns(lyric, isValid)) {
-      if (keepAll) out.push(chords.map((c) => `[${c.chord}]`).join("   "));
-      continue;
-    }
-    const start = lyric.search(/\S/);
-    const slots = new Map<number, string[]>();
-    // Chords over the space before the first word are played before it; the last one lands on it.
-    const lead = chords.filter((c) => c.col < start);
-    const leadText = lead.slice(0, -1).map((c) => `[${c.chord}] `).join("");
-    if (lead.length) slots.set(start, [lead[lead.length - 1].chord]);
-    for (const { chord, col } of chords.slice(lead.length)) {
-      let at = Math.min(col, lyric.length);
-      // Over a space or a comma between words: it belongs to the next word.
-      while (at < lyric.length && /[\s,;:.!?)]/.test(lyric[at])) at++;
-      slots.set(at, [...(slots.get(at) || []), chord]);
-    }
-    let merged = "";
-    for (let k = 0; k <= lyric.length; k++) {
-      const here = slots.get(k) || [];
-      merged += k === lyric.length && k > 0 ? here.map((c) => ` [${c}]`).join("") : here.map((c) => `[${c}]`).join("");
-      if (k < lyric.length) merged += lyric[k];
-    }
-    out.push(snapLayoutLine((leadText + merged.trim()).replace(/\s+/g, " ").trim()));
-    i++;
-  }
-  return out;
-}
-
-// A section name on its own line in a chord site's text: "[Chorus]", "[Verse 2]".
-const SOURCE_HEADER = /^\s*\[([^\]]+)\]\s*$/;
-
-/**
- * The AI sometimes marks a chorus as "the same again" when the source sings it with other words
- * or chords (a second chorus with a different line, a longer last chorus). When the source names
- * its sections, compare each repeat with the source's chorus at that spot and write out the ones
- * that differ, straight from the source. Returns how many came back.
- */
-// deno-lint-ignore no-explicit-any
-function restoreChangedChoruses(sections: any[], sourceText: string, isValid: (c: string) => boolean): number {
-  const blocks: Array<{ label: string; text: string[] }> = [];
-  let cur: { label: string; text: string[] } | null = null;
-  for (const raw of String(sourceText || "").replace(/\r/g, "").split("\n")) {
-    const h = raw.match(SOURCE_HEADER);
-    if (h && !isValid(h[1].trim())) { cur = { label: h[1].trim(), text: [] }; blocks.push(cur); continue; }
-    if (cur) cur.text.push(raw);
-  }
-  const isChorus = (label: string) => /chorus|refrain/i.test(label) && !/pre|post/i.test(label);
-  const fromSource = blocks.filter((b) => isChorus(b.label)).map((b) => layoutFromSourceText(b.text.join("\n"), isValid, true));
-  // deno-lint-ignore no-explicit-any
-  const inSheet = (sections || []).filter((s: any) => (s.type === "chorus" || s.type === "chorus_repeat") && !/pre|post/i.test(s.label || ""));
-  if (fromSource.length < 2 || fromSource.length !== inSheet.length || inSheet[0].type !== "chorus") return 0;
-  const first = inSheet[0];
-  // deno-lint-ignore no-explicit-any
-  const firstLines: string[] = (first.lines || []).filter((l: any) => !l.tab && typeof l.text === "string").map((l: any) => l.text);
-  const words = (lines: string[]) => lines.map(wordsKey).filter(Boolean).join("|");
-  const chords = (lines: string[]) => lines.flatMap(chordList).join(" ");
-  // Only when the source's first chorus reads like the sheet's: proof the two line up.
-  if (words(fromSource[0]) !== words(firstLines)) return 0;
-  let restored = 0;
-  inSheet.forEach((sec, i) => {
-    const src = fromSource[i];
-    if (i === 0 || sec.type !== "chorus_repeat" || !src.length) return;
-    if (words(src) === words(firstLines) && chords(src) === chords(firstLines)) return;
-    sec.type = "chorus";
-    sec.label = sec.label && !/repeat/i.test(sec.label) ? sec.label : (first.label || "Chorus");
-    sec.lines = src.map((text) => ({ text, tab: false }));
-    restored++;
-  });
-  return restored;
-}
-
-/** Text pastes keep exact columns; this only moves chords that land inside a word to a syllable start. */
-function snapLayoutLine(line: string): string {
-  const parts: Array<{ chord: string; at: number }> = [];
-  let text = "";
-  for (const piece of line.split(/(\[[^\]]+\])/)) {
-    const m = piece.match(/^\[([^\]]+)\]$/);
-    if (m) parts.push({ chord: m[1], at: text.length });
-    else text += piece;
-  }
-  const slots = new Map<number, string[]>();
-  let prev = -1;
-  for (const { chord, at } of parts) {
-    let i = at < text.length && /[A-Za-z']/.test(text[at]) ? snapToSyllable(text, at) : at;
-    if (i < prev) i = prev;
-    slots.set(i, [...(slots.get(i) || []), chord]);
-    prev = i;
-  }
-  let out = "";
-  for (let i = 0; i <= text.length; i++) {
-    out += (slots.get(i) || []).map((c) => `[${c}]`).join("");
-    if (i < text.length) out += text[i];
-  }
-  return out;
-}
-// ==== END LAYOUT ====
-
-// The AI lists the word under each chord before writing the line ("D over river, A over
-// morning"). When the line it wrote disagrees, rebuild the line from that list.
-// deno-lint-ignore no-explicit-any
-function applyPlacementNotes(sections: any[]): number {
-  let fixed = 0;
-  for (const sec of sections || []) {
-    for (const line of sec.lines || []) {
-      if (line.tab || typeof line.text !== "string" || typeof line.placement !== "string") continue;
-      const notes = [...line.placement.matchAll(/([A-G][^\s,;]*)\s+(?:over\s+["“]?([^\s,;"”]+)["”]?|at\s+end)/gi)]
-        .map((m) => ({ chord: m[1], anchor: m[2] || null }));
-      const chords = [...line.text.matchAll(/\[([^\]]+)\]/g)].map((m) => m[1]);
-      if (!notes.length || notes.length !== chords.length || notes.some((n, i) => n.chord !== chords[i])) continue;
-      const lyric = line.text.replace(/\[[^\]]*\]/g, "");
-      if (!lyric.trim()) continue;
-      const lower = lyric.toLowerCase();
-      const clean = (a: string) => a.toLowerCase().replace(/[.,!?;:]+$/, "");
-      // Where the AI put each chord in the line it wrote.
-      const written: number[] = [];
-      let plain = 0;
-      for (const piece of line.text.split(/(\[[^\]]+\])/)) {
-        if (/^\[[^\]]+\]$/.test(piece)) written.push(plain);
-        else plain += piece.length;
-      }
-      const onWord = (a: string, at: number) => lower.startsWith(a, at) || lower.startsWith(a, at + 1);
-      // The line already puts every chord on its word: keep it. Rebuilding it could only lose
-      // which of several same words ("be, … be, … be") each chord is on.
-      if (notes.every((n, k) => (n.anchor ? onWord(clean(n.anchor), written[k]) : written[k] >= lyric.trimEnd().length))) continue;
-      const find = (a: string, from: number) => {
-        // Prefer the anchor at the start of a word, then anywhere inside one.
-        let at = -1;
-        for (let i = lower.indexOf(a, from); i >= 0; i = lower.indexOf(a, i + 1)) {
-          if (i === 0 || !/[a-z']/i.test(lower[i - 1])) return i;
-          if (at < 0) at = i;
-        }
-        return at;
-      };
-      const spots: number[] = [];
-      let cursor = 0;
-      let ok = true;
-      for (let k = 0; k < notes.length; k++) {
-        const n = notes[k];
-        if (!n.anchor) { spots.push(lyric.length); continue; }
-        const a = clean(n.anchor);
-        // The same word named again ("Am over be, G over be") is its next appearance when there
-        // is one; several quick chords on a word that appears once stay together.
-        const prev = k > 0 && notes[k - 1].anchor ? clean(notes[k - 1].anchor as string) : null;
-        let at = prev === a ? find(a, cursor + 1) : -1;
-        if (at < 0) at = find(a, cursor);
-        if (at < 0) { ok = false; break; }
-        spots.push(at);
-        cursor = at;
-      }
-      if (!ok) continue;
-      let out = "";
-      for (let i = 0; i <= lyric.length; i++) {
-        notes.forEach((n, k) => { if (spots[k] === i) out += (i === lyric.length && lyric.length ? " " : "") + `[${n.chord}]`; });
-        if (i < lyric.length) out += lyric[i];
-      }
-      out = out.replace(/\s+/g, " ").trim();
-      if (out !== line.text.replace(/\s+/g, " ").trim()) { line.text = out; fixed++; }
-    }
-  }
-  return fixed;
-}
-
-// Some sources write a repeat out in full (the same lines again, back to back). Print it once
-// with a count, so the sheet stays short: "Bridge (2x)", or a "Repeat 4x" line after the block.
-// deno-lint-ignore no-explicit-any
-function collapseWrittenRepeats(sections: any[]) {
-  const same = (a: { text?: string }, b: { text?: string }) =>
-    typeof a?.text === "string" && typeof b?.text === "string" && a.text.trim() === b.text.trim() && a.text.trim() !== "";
-  for (const sec of sections || []) {
-    const lines = Array.isArray(sec.lines) ? sec.lines : [];
-    if (sec.type === "tab" || lines.length < 2) continue;
-    const out = [];
-    let i = 0;
-    while (i < lines.length) {
-      let best = { size: 0, times: 1 };
-      for (let size = Math.floor((lines.length - i) / 2); size >= 1; size--) {
-        let times = 1;
-        while (i + (times + 1) * size <= lines.length &&
-          lines.slice(i, i + size).every((l: { text?: string }, k: number) => same(l, lines[i + times * size + k]))) times++;
-        // Same coverage: the smaller block reads simpler ("3 lines, 4x" beats "6 lines, 2x").
-        if (times > 1 && size * times >= best.size * best.times) best = { size, times };
-      }
-      if (best.times > 1) {
-        out.push(...lines.slice(i, i + best.size));
-        const wholeSection = i === 0 && best.size * best.times === lines.length;
-        if (wholeSection && !/\(\d+x\)/.test(sec.label || "")) {
-          sec.label = `${sec.label || ""} (${best.times}x)`.trim();
-        } else if (!wholeSection) {
-          out.push({ text: `(Repeat ${best.times}x)`, tab: false });
-        }
-        i += best.size * best.times;
-      } else {
-        out.push(lines[i]);
-        i++;
-      }
-    }
-    sec.lines = out;
-  }
-}
-
-// Chord voicing charts at the top of a page aren't part of the song.
-const NOT_SONG_SECTION = /chord (?:shapes?|diagrams?|charts?|voicings?)|voicings?|fingerings?/i;
-
-// Convert validated structured sheet JSON into canonical ChordPro
-function sheetToChordPro(sheet: {
-  title: string;
-  artist?: string | null;
-  key: string;
-  capo?: number;
-  tempo?: number | null;
-  time_signature?: string | null;
-  tuning?: string | null;
-  sections: Array<{
-    type: string;
-    label?: string | null;
-    sidebar_note?: string | null;
-    lines: Array<{ text: string; tab?: boolean }>;
-  }>;
-}): string {
-  const out: string[] = [];
-  out.push(`{title: ${sheet.title.trim()}}`);
-  if (sheet.artist && sheet.artist.trim()) out.push(`{artist: ${sheet.artist.trim()}}`);
-  if (sheet.key && sheet.key.trim()) out.push(`{key: ${sheet.key.trim()}}`);
-  if (sheet.capo && sheet.capo > 0) out.push(`{capo: ${sheet.capo}}`);
-  if (sheet.tempo && sheet.tempo > 0) out.push(`{tempo: ${sheet.tempo}}`);
-  if (sheet.time_signature && sheet.time_signature.trim()) out.push(`{time: ${sheet.time_signature.trim()}}`);
-  const tuning = TUNING_VALUES[sheet.tuning || "standard"];
-  if (tuning && tuning !== TUNING_VALUES.standard) out.push(`{tuning: ${tuning}}`);
-  out.push("");
-
-  sheet.sections.forEach((sec, idx) => {
-    const t = (sec.type || "verse").toLowerCase();
-    if (t === "chorus_repeat") {
-      out.push("{chorus}");
-      if (idx < sheet.sections.length - 1) out.push("");
-      return;
-    }
-    const tag = ["verse", "chorus", "bridge", "intro", "outro", "instrumental", "pre_chorus", "tab"].includes(t) ? t : "verse";
-    const label = sec.label ? sec.label.trim() : "";
-    out.push(label ? `{start_of_${tag}: ${label}}` : `{start_of_${tag}}`);
-    if (sec.sidebar_note && sec.sidebar_note.trim()) {
-      out.push(`{note: ${sec.sidebar_note.trim()}}`);
-    }
-    for (const l of sec.lines || []) {
-      if (l.text == null) continue;
-      const text = String(l.text);
-      // A line that is only a note in parentheses, like "(Repeat 4x)", prints as a comment.
-      if (!l.tab && /^\((?:repeat|x\d|\d+x)[^)]*\)$/i.test(text.trim())) {
-        out.push(`{comment: ${text.trim().slice(1, -1)}}`);
-      } else {
-        out.push(text);
-      }
-    }
-    out.push(`{end_of_${tag}}`);
-    if (idx < sheet.sections.length - 1) out.push("");
-  });
-  return out.join("\n");
 }
 
 // URL safety helpers (copied from House Index)
@@ -878,42 +184,40 @@ async function readCapped(res: Response, maxBytes = MAX_PAGE_BYTES): Promise<str
   return new TextDecoder().decode(buf);
 }
 
-// Pulls the song text out of a chord-site page: Ultimate Guitar keeps the sheet in a JSON
-// attribute, many sites put it in <pre>, and the rest is the page text without scripts.
-function pageTextForImport(pageHtml: string): string {
-  const decode = (t: string) => t
-    .replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&");
-  const store = pageHtml.match(/class="js-store"\s+data-content="([^"]+)"/);
-  if (store) {
-    try {
-      const data = JSON.parse(decode(store[1]));
-      const page = data?.store?.page?.data;
-      const content = page?.tab_view?.wiki_tab?.content;
-      if (typeof content === "string" && content.trim()) {
-        const head = [page?.tab?.song_name, page?.tab?.artist_name].filter(Boolean).join(" by ");
-        const capo = page?.tab_view?.meta?.capo ? `\nCapo: ${page.tab_view.meta.capo}` : "";
-        return `${head}${capo}\n\n${content.replace(/\[\/?(?:ch|tab)\]/g, "")}`.slice(0, 25_000);
-      }
-    } catch { /* fall through to the page text */ }
-  }
-  const title = decode((pageHtml.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || "").trim();
-  const withoutCode = pageHtml
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ");
-  const pres = [...withoutCode.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/gi)].map((m) => m[1]);
-  const body = pres.join("\n\n").replace(/<[^>]+>/g, "").trim().length > 200 ? pres.join("\n\n") : withoutCode;
-  const text = decode(body.replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|h\d)>/gi, "\n").replace(/<[^>]+>/g, ""))
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-  return text ? `${title}\n\n${text}`.slice(0, 25_000) : "";
-}
+// ---------------------------------------------------------------------------
+// Strict Tool Schemas (every object has `additionalProperties: false` for Sonnet 5.5 `strict: true`)
+// ---------------------------------------------------------------------------
+const PLACEMENT_FIELD = {
+  type: "string",
+  description: "Write this first. Each chord in the line, left to right, and the letters printed directly under its left edge to the end of that word: 'D over river, A over morning'. Part of a word for a chord inside a word: 'A over ter' for wa-ter. Use 'G at end' for a chord after the last word, and '' for a line with no chords."
+};
 
-const SHEET_SCHEMA = {
-  type: "object",
-  properties: {
+const SOURCE_TEXT_FIELD = {
+  type: "string",
+  description: "Write this first. The chord sheet exactly as it appears, line by line in reading order (column one, then column two), each chord line directly above its lyric line, with spaces putting every chord over the exact letter it sits on, as in a monospaced chord chart. Include section names. Leave out clutter."
+};
+
+const MONOSPACED_FIELD = {
+  type: "boolean",
+  description: "Write this first. True when the sheet is set in a fixed-width (typewriter-style) font where letters line up in columns, as in most chord apps; false for ordinary printed type."
+};
+
+// Drops `placement` whenever exact source positions already exist (`withPlacement = false`),
+// keeping it for photos and unstructured sources (`withPlacement = true`).
+function schemaFor(withSource: boolean, withPlacement = true) {
+  const lineProps = withPlacement
+    ? {
+        placement: PLACEMENT_FIELD,
+        text: { type: "string", description: "The sung line with each [Chord] placed exactly as in placement, e.g. 'Down the [D]river in the [A]morning'. Chord-only lines look like '[G]   [C]   [D]'." },
+        tab: { type: "boolean" }
+      }
+    : {
+        text: { type: "string", description: "The sung line with inline [Chord] markers, e.g. 'Down the [D]river in the [A]morning'. Chord-only lines look like '[G]   [C]   [D]'." },
+        tab: { type: "boolean" }
+      };
+  const lineRequired = withPlacement ? ["placement", "text", "tab"] : ["text", "tab"];
+
+  const baseProps = {
     title: { type: "string", description: "Song title only (not the artist, album, or site name)" },
     artist: { type: ["string", "null"] },
     key: { type: "string", description: "Key of the chord shapes as written, e.g. 'G', 'D', 'Em', 'Bb'" },
@@ -927,6 +231,7 @@ const SHEET_SCHEMA = {
       type: "array",
       items: {
         type: "object",
+        additionalProperties: false,
         properties: {
           type: { type: "string", enum: ["verse", "chorus", "chorus_repeat", "pre_chorus", "bridge", "intro", "outro", "instrumental", "tab"] },
           label: { type: ["string", "null"], description: "e.g. 'Intro (4x)', 'Verse 1', 'Chorus', 'Bridge (2x)'" },
@@ -935,12 +240,9 @@ const SHEET_SCHEMA = {
             type: "array",
             items: {
               type: "object",
-              properties: {
-                placement: { type: "string", description: "Write this first. Each chord in the line, left to right, and the letters printed directly under its left edge to the end of that word: 'D over river, A over morning'. Part of a word for a chord inside a word: 'A over ter' for wa-ter. Use 'G at end' for a chord after the last word, and '' for a line with no chords." },
-                text: { type: "string", description: "The sung line with each [Chord] placed exactly as in placement, e.g. 'Down the [D]river in the [A]morning'. Chord-only lines look like '[G]   [C]   [D]'." },
-                tab: { type: "boolean" }
-              },
-              required: ["placement", "text", "tab"]
+              additionalProperties: false,
+              properties: lineProps,
+              required: lineRequired
             }
           }
         },
@@ -949,30 +251,42 @@ const SHEET_SCHEMA = {
     },
     notes: { type: ["string", "null"], description: "Anything a player needs that isn't in a section, or null" },
     other_songs: { type: "array", items: { type: "string" }, description: "Titles of the other complete songs in the input, in order. Empty when the input is one song." }
-  },
-  required: ["title", "artist", "key", "capo", "tuning", "tempo", "time_signature", "genre", "form", "sections", "notes", "other_songs"]
-};
+  };
 
-// Photos and links have no exact layout to check against, so for those the AI first copies the
-// sheet out verbatim, chords over lyrics, and the chords are placed by column from that copy.
-const SOURCE_TEXT_FIELD = {
-  type: "string",
-  description: "Write this first. The chord sheet exactly as it appears, line by line in reading order (column one, then column two), each chord line directly above its lyric line, with spaces putting every chord over the exact letter it sits on, as in a monospaced chord chart. Include section names. Leave out clutter."
-};
-// Copying spacing only works for fixed-width type (chord apps, many chord sites), where every
-// letter sits in a column. Printed hymn sheets use ordinary type, so the copy can't be trusted.
-const MONOSPACED_FIELD = {
-  type: "boolean",
-  description: "Write this first. True when the sheet is set in a fixed-width (typewriter-style) font where letters line up in columns, as in most chord apps; false for ordinary printed type."
-};
-function schemaFor(withSource: boolean) {
-  if (!withSource) return SHEET_SCHEMA;
+  const baseRequired = ["title", "artist", "key", "capo", "tuning", "tempo", "time_signature", "genre", "form", "sections", "notes", "other_songs"];
+
+  if (!withSource) {
+    return {
+      type: "object",
+      additionalProperties: false,
+      properties: baseProps,
+      required: baseRequired
+    };
+  }
   return {
-    ...SHEET_SCHEMA,
-    properties: { monospaced: MONOSPACED_FIELD, source_text: SOURCE_TEXT_FIELD, ...SHEET_SCHEMA.properties },
-    required: ["monospaced", "source_text", ...SHEET_SCHEMA.required]
+    type: "object",
+    additionalProperties: false,
+    properties: { monospaced: MONOSPACED_FIELD, source_text: SOURCE_TEXT_FIELD, ...baseProps },
+    required: ["monospaced", "source_text", ...baseRequired]
   };
 }
+
+// Lightweight metadata-only schema for Track A direct parses (zero lyrics sent).
+const META_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    title: { type: "string", description: "Clean song title in Title Case (no artist or site name)" },
+    artist: { type: ["string", "null"], description: "Performing artist or hymn writers, or null" },
+    tempo: { type: "integer", description: "Beats per minute for the well-known recording or style" },
+    time_signature: { type: "string", description: "e.g. '4/4', '3/4', '6/8'" },
+    genre: { type: "string", enum: ["worship", "country", "rock", "pop"] }
+  },
+  required: ["title", "artist", "tempo", "time_signature", "genre"]
+};
+
+const META_PROMPT = `Return clean song metadata (title in Title Case, performing artist, typical tempo BPM, time signature, and genre) for the named song. Always respond by calling the save_song_metadata tool.
+- worship = Christian worship or hymns; country = country and folk; rock = rock, punk, emo, indie, alternative; pop = everything else.`;
 
 // ---------------------------------------------------------------------------
 // Melody range: the lowest and highest notes the lead singer sings, so the app can match songs
@@ -981,11 +295,13 @@ function schemaFor(withSource: boolean) {
 const MAX_MELODY_SONGS = 25;
 const MELODY_SCHEMA = {
   type: "object",
+  additionalProperties: false,
   properties: {
     songs: {
       type: "array",
       items: {
         type: "object",
+        additionalProperties: false,
         properties: {
           id: { type: "string", description: "The id given for this song" },
           known: { type: "boolean", description: "True only if you know this song's sung melody well enough to name its lowest and highest notes" },
@@ -1001,7 +317,7 @@ const MELODY_SCHEMA = {
   required: ["songs"]
 };
 
-const MELODY_PROMPT = `You know the melodies of popular songs, hymns, and worship songs. For each song, give the lowest and highest notes of the lead vocal melody and the key it is sung in.
+const MELODY_PROMPT = `You know the melodies of popular songs, hymns, and worship songs. For each song, give the lowest and highest notes of the lead vocal melody and the key it is sung in. Always return your answer by calling the save_melody_ranges tool.
 
 - Use the best-known recording by the named artist. For a hymn, use the melody in its usual hymnal key.
 - Count the main melody the lead singer sings, including chorus peaks and a final chorus that goes up. Leave out brief ad-libs, shouts, spoken parts, and backing vocals.
@@ -1010,7 +326,6 @@ const MELODY_PROMPT = `You know the melodies of popular songs, hymns, and worshi
 - If you don't know a song's melody well enough to name its notes, set known false and the notes null. Never guess from the title alone.`;
 
 const NOTE_PITCH: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
-// "F#3" -> 54 (MIDI, 60 = middle C), or null.
 function noteToMidi(note: unknown): number | null {
   const m = String(note || "").trim().match(/^([A-Ga-g])([#b♯♭]?)(-?\d)$/);
   if (!m) return null;
@@ -1027,12 +342,11 @@ function melodyFromAi(item: any) {
   const low = noteToMidi(item.low_note);
   const high = noteToMidi(item.high_note);
   const key = cleanKey(item.recording_key);
-  // A sung melody spans about an octave or two, between a low bass note and a high soprano note.
   if (low == null || high == null || !key || low < 33 || high > 88 || high <= low || high - low > 30) return null;
   return { id: String(item.id), recording_key: key, low, high, confidence: ["high", "medium", "low"].includes(item.confidence) ? item.confidence : "low" };
 }
 
-const SYSTEM_PROMPT = `You turn guitar chord sheets into clean Chord Book sheets. People read them while playing guitar and singing, so every chord must sit on the right word and every line must read like the song.
+const SYSTEM_PROMPT = `You turn guitar chord sheets into clean Chord Book sheets. People read them while playing guitar and singing, so every chord must sit on the right word and every line must read like the song. Always return your answer by calling the save_chord_sheet tool.
 
 The input may be a messy copy from a chord website, screenshots, a photo, a PDF, or an existing sheet to check.
 
@@ -1159,11 +473,17 @@ Deno.serve(async (req: Request) => {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY!, "anthropic-version": ANTHROPIC_VERSION },
         body: JSON.stringify({
-          model: MODEL_TEXT,
-          max_tokens: 4096,
+          model: MODEL_MELODY,
+          max_tokens: 8192,
+          ...noThinking(MODEL_MELODY),
           system: MELODY_PROMPT,
-          tools: [{ name: "save_melody_ranges", description: "Return each song's melody range", input_schema: MELODY_SCHEMA }],
-          tool_choice: { type: "tool", name: "save_melody_ranges" },
+          tools: [{
+            name: "save_melody_ranges",
+            description: "Return each song's melody range",
+            strict: true,
+            input_schema: MELODY_SCHEMA
+          }],
+          tool_choice: { type: "auto" },
           messages: [{
             role: "user",
             content: "Songs:\n" + list.map((x: { id: string; title: string; artist: string; key: string }) =>
@@ -1174,34 +494,44 @@ Deno.serve(async (req: Request) => {
       const payload = await res.json().catch(() => null);
       const ms = performance.now() - t0;
       if (!res.ok) {
-        await logAiCall(supabase, "cb_melody", MODEL_TEXT, false, ms, payload?.usage, userId);
+        await logAiCall(supabase, "cb_melody", MODEL_MELODY, false, ms, payload?.usage, userId);
         if ([429, 529].includes(res.status)) return json({ error: "The AI is busy right now. Try again in a minute." });
         console.error(`Anthropic HTTP ${res.status}:`, String(payload?.error?.message || "").slice(0, 160));
         return json({ error: "The AI couldn’t look those up. Try again later." });
       }
       // deno-lint-ignore no-explicit-any
       const tool = (payload?.content || []).find((b: any) => b.type === "tool_use" && b.name === "save_melody_ranges");
+      // No answer (cut off, or prose instead of the tool) is a failure, not "every song unknown":
+      // the app stops asking about songs reported unknown.
+      if (!tool || payload?.stop_reason === "max_tokens" || !Array.isArray(tool.input?.songs)) {
+        await logAiCall(supabase, "cb_melody", MODEL_MELODY, false, ms, payload?.usage, userId);
+        return json({ error: "The AI didn’t send the melody ranges back. Try again in a minute." });
+      }
       const ids = new Set(list.map((x: { id: string }) => x.id));
       const melodies = (Array.isArray(tool?.input?.songs) ? tool.input.songs : [])
         .map(melodyFromAi)
         .filter((m: { id: string } | null) => m && ids.has(m.id));
-      await logAiCall(supabase, "cb_melody", MODEL_TEXT, !!tool, ms, payload?.usage, userId);
-      return json({ melodies, unknown: list.length - melodies.length });
+      await logAiCall(supabase, "cb_melody", MODEL_MELODY, !!tool, ms, payload?.usage, userId);
+      return json({ melodies, unknown: list.length - melodies.length, model: MODEL_MELODY });
     } catch (err) {
       console.error("melody lookup error:", err);
       return json({ error: "Couldn’t reach the AI. Try again later." });
     }
   }
+
   // deno-lint-ignore no-explicit-any
   const userContent: any[] = [];
   let model = MODEL_TEXT;
-
   // Where the source says each chord sits, used to correct the AI's chord placement.
   let layout: string[] = [];
-  // Set below for photos and links.
+  // Set below for photos and unstructured links.
   let withSource = false;
   // The source as text, when there is one, to check repeated choruses against.
   let sourceText = "";
+  // Track A direct result when a structured source (UG link or clean single-song digital PDF) parses cleanly.
+  // deno-lint-ignore no-explicit-any
+  let directSheet: any = null;
+  let directSourceKind = "";
 
   if (reqType === "text") {
     if (Array.isArray(body?.layout)) {
@@ -1246,13 +576,25 @@ Deno.serve(async (req: Request) => {
     if (pdfData.length > 7_500_000) return json({ error: "PDF is too large (max 5 MB)." });
     try {
       const bytes = Uint8Array.from(atob(pdfData), (ch) => ch.charCodeAt(0));
-      layout = await pdfLayoutLines(bytes);
+      const pdfInfo = await pdfExtract(bytes);
+      layout = pdfInfo.layoutLines;
+      // Step 5: Clean single-song digital PDFs with section names can use Track A directly
+      // when there is no custom user steer note requiring AI interpretation.
+      if (!note) {
+        const parsedPdf = parsePdfDirect(pdfInfo, typeof body?.fileName === "string" ? body.fileName : "");
+        if (parsedPdf.confidence === "high" && parsedPdf.sheet) {
+          directSheet = parsedPdf.sheet;
+          directSourceKind = "pdf";
+        }
+      }
     } catch (e) {
       console.error("PDF text layer unreadable; using the AI's placement:", e);
     }
+    // Step 3: Prompt-cache the PDF document block so multi-song set list PDFs reuse it for songs 2..N.
     userContent.push({
       type: "document",
-      source: { type: "base64", media_type: "application/pdf", data: pdfData }
+      source: { type: "base64", media_type: "application/pdf", data: pdfData },
+      cache_control: { type: "ephemeral" }
     });
     userContent.push({
       type: "text",
@@ -1286,33 +628,42 @@ Deno.serve(async (req: Request) => {
     } catch {
       return json({ error: "Couldn’t load that page — copy the chords and paste them instead." });
     }
-    const pageText = pageTextForImport(pageHtml);
-    sourceText = pageText;
+    const extracted = pageDataForImport(pageHtml);
+    const pageText = extracted.text;
+    sourceText = extracted.taggedText;
     if (pageText.length < 200) {
       return json({ error: "That page builds itself in the browser, so it can’t be read from a link. Copy the song and paste it instead." });
+    }
+    // Preserve native UG `[ch]` tags in layout extraction for exact chord columns.
+    layout = layoutFromSourceText(extracted.taggedText, isValidChordToken);
+    withSource = layout.length < 3;
+    if (withSource) layout = [];
+    // A page with no chords on it (a paid "Official" version, a sign-in wall, a video page)
+    // would leave the AI to fill the song in from memory. Say so instead, before any cost.
+    const chordLines = extracted.taggedText.split("\n").filter((l) => chordColumns(l, isValidChordToken)).length;
+    const inlineChords = (pageText.match(/\[[A-G][#b]?[^\]\s]{0,8}\]/g) || []).length;
+    if (chordLines < 4 && inlineChords < 6) {
+      return json({ error: "That page doesn’t show the chords. It may be a paid or sign-in version. Open the free Chords version and share that link, or copy the chords and paste them." });
+    }
+    // Step 2: Track A direct parse for Ultimate Guitar links (falls back to Track B AI if confidence !== "high").
+    if (extracted.ug && !note) {
+      const ugRes = parseUgDirect(extracted.ug);
+      if (ugRes.confidence === "high" && ugRes.sheet) {
+        directSheet = ugRes.sheet;
+        directSourceKind = "ug";
+        if (ugRes.layoutLines.length) layout = ugRes.layoutLines;
+      }
     }
     userContent.push({
       type: "text",
       text: (note ? `User note: ${note}\n\n` : "") + `Extract the chord sheet from this page (${url.hostname}):\n\n${pageText}`
     });
-    // Chord sites lay sheets out as fixed-width chords over lyrics, so the page's own text gives
-    // exact chord columns. Only when it doesn't does the AI copy the sheet out.
-    layout = layoutFromSourceText(pageText, isValidChordToken);
-    withSource = layout.length < 3;
-    if (withSource) layout = [];
-    // A page with no chords on it (a paid "Official" version, a sign-in wall, a video page)
-    // would leave the AI to fill the song in from memory. Say so instead, before any cost.
-    const chordLines = pageText.split("\n").filter((l) => chordColumns(l, isValidChordToken)).length;
-    const inlineChords = (pageText.match(/\[[A-G][#b]?[^\]\s]{0,8}\]/g) || []).length;
-    if (chordLines < 4 && inlineChords < 6) {
-      return json({ error: "That page doesn’t show the chords. It may be a paid or sign-in version. Open the free Chords version and share that link, or copy the chords and paste them." });
-    }
     model = MODEL_TEXT;
   } else {
     return json({ error: "Unsupported import type." });
   }
 
-  // 3. Check daily cap right before paid call (fail closed!)
+  // 3. Check daily cap right before any paid AI call (fail closed!)
   if (!unlimited) {
     const { data: capCount, error: capErr } = await supabase.rpc("increment_ai_usage", {
       usage_kind: "cb_import",
@@ -1327,9 +678,87 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // 4. Call Anthropic with tool schema + Chord Net validation + 1 repair attempt
   // deno-lint-ignore no-explicit-any
-  async function callClaude(messages: any[], retry = true): Promise<{ toolInput: any; usage: any; ms: number; stopReason: string }> {
+  function resultFor(sheet: any) {
+    const tempo = Number(sheet.tempo);
+    return {
+      title: sheet.title,
+      artist: sheet.artist,
+      key: sheet.key,
+      capo: sheet.capo || 0,
+      tempo: tempo >= 20 && tempo <= 300 ? Math.round(tempo) : null,
+      time_signature: sheet.time_signature || "4/4",
+      tuning: TUNING_VALUES[sheet.tuning] || TUNING_VALUES.standard,
+      genre: GENRES.includes(sheet.genre) ? sheet.genre : "pop",
+      form: typeof sheet.form === "string" ? sheet.form.replace(/^form:\s*/i, "").trim() : "",
+      notes: sheet.notes,
+      chordpro: sheetToChordPro(sheet)
+    };
+  }
+
+  // Track A fast path: sheet is already built deterministically with exact chord positions.
+  // Enrich tempo/genre/time_signature with a tiny metadata-only AI call (zero lyrics sent).
+  if (directSheet) {
+    try {
+      const t0 = performance.now();
+      const metaRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": ANTHROPIC_API_KEY!,
+          "anthropic-version": ANTHROPIC_VERSION
+        },
+        body: JSON.stringify({
+          model: MODEL_META,
+          max_tokens: 1024,
+          ...noThinking(MODEL_META),
+          system: META_PROMPT,
+          tools: [{
+            name: "save_song_metadata",
+            description: "Return clean title, artist, tempo, time signature, and genre",
+            strict: true,
+            input_schema: META_SCHEMA
+          }],
+          tool_choice: { type: "auto" },
+          messages: [{
+            role: "user",
+            content: `Song: "${directSheet.title}"${directSheet.artist ? ` by ${directSheet.artist}` : ""} (Key: ${directSheet.key}, Capo: ${directSheet.capo || 0}, Sections: ${(directSheet.sections || []).map((s: { label?: string }) => s.label).filter(Boolean).join(", ")})`
+          }]
+        })
+      });
+      const ms = performance.now() - t0;
+      const metaPayload = await metaRes.json().catch(() => null);
+      // deno-lint-ignore no-explicit-any
+      const metaTool = (metaPayload?.content || []).find((b: any) => b.type === "tool_use" && b.name === "save_song_metadata");
+      await logAiCall(supabase, "cb_import_meta", MODEL_META, !!(metaRes.ok && metaTool?.input), ms, metaPayload?.usage, userId);
+      if (metaRes.ok && metaTool?.input) {
+        const mi = metaTool.input;
+        if (mi.title && String(mi.title).trim()) directSheet.title = String(mi.title).trim();
+        if (mi.artist) directSheet.artist = String(mi.artist).trim();
+        if (!directSheet.tempo && Number(mi.tempo) >= 20 && Number(mi.tempo) <= 300) directSheet.tempo = Math.round(Number(mi.tempo));
+        if (mi.time_signature && String(mi.time_signature).trim()) directSheet.time_signature = String(mi.time_signature).trim();
+        if (GENRES.includes(mi.genre)) directSheet.genre = mi.genre;
+      }
+    } catch (err) {
+      console.error("Track A metadata lookup skipped:", err);
+    }
+    const resObj = resultFor(directSheet);
+    return json({
+      result: resObj,
+      results: [resObj],
+      missed: 0,
+      placed_by: "layout",
+      direct_source: directSourceKind,
+      layout_lines: layout.length
+    });
+  }
+
+  // Drop per-line `placement` notes whenever exact source positions already exist (`layout.length > 0`).
+  const withPlacement = layout.length === 0;
+
+  // 4. Track B: Call Claude Sonnet 5.5 with strict schema + auto tool choice + Chord Net repair
+  // deno-lint-ignore no-explicit-any
+  async function callClaude(messages: any[], retry = true): Promise<{ toolInput: any; toolId: string | null; content: any[]; history: any[]; usage: any; ms: number; stopReason: string }> {
     const t0 = performance.now();
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -1341,14 +770,16 @@ Deno.serve(async (req: Request) => {
       body: JSON.stringify({
         model,
         // Billed on actual output, so a long song's headroom costs nothing extra.
-        max_tokens: 8192,
-        system: SYSTEM_PROMPT,
+        max_tokens: 16000,
+        ...noThinking(model),
+        system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
         tools: [{
           name: "save_chord_sheet",
           description: "Return the transcribed guitar chord sheet",
-          input_schema: schemaFor(withSource)
+          strict: true,
+          input_schema: schemaFor(withSource, withPlacement)
         }],
-        tool_choice: { type: "tool", name: "save_chord_sheet" },
+        tool_choice: { type: "auto" },
         messages
       })
     });
@@ -1366,7 +797,6 @@ Deno.serve(async (req: Request) => {
       const reason = String(payload?.error?.message || "").slice(0, 160);
       console.error(`Anthropic HTTP ${res.status}:`, reason);
       if (/credit balance|usage limits/i.test(reason)) throw new Error("NO_CREDIT");
-      // The API won't write out the full words of some well-known songs.
       if (/content filtering/i.test(reason)) throw new Error("FILTERED");
       throw new Error(`API:${res.status} ${reason}`);
     }
@@ -1374,16 +804,33 @@ Deno.serve(async (req: Request) => {
     if (payload?.stop_reason === "max_tokens") throw new Error("TOO_LONG");
     // deno-lint-ignore no-explicit-any
     const toolBlock = (payload?.content || []).find((b: any) => b.type === "tool_use" && b.name === "save_chord_sheet");
-    return { toolInput: toolBlock?.input || null, usage: payload?.usage, ms, stopReason: payload?.stop_reason };
+    // With tool_choice: auto, if the model replied with prose instead of calling the tool, nudge once.
+    if (!toolBlock && retry) {
+      const said = Array.isArray(payload?.content) && payload.content.length ? payload.content : null;
+      return callClaude(said
+        ? [...messages, { role: "assistant", content: said }, { role: "user", content: "Return the chord sheet now by calling the save_chord_sheet tool." }]
+        : messages, false);
+    }
+    // The reply exactly as sent (thinking blocks and all) for the repair turn; tidySheet edits a copy.
+    return {
+      toolInput: toolBlock?.input ? structuredClone(toolBlock.input) : null,
+      toolId: toolBlock?.id || null,
+      content: payload?.content || [],
+      // The conversation this reply belongs to (includes a nudge turn, if there was one).
+      history: messages,
+      usage: payload?.usage,
+      ms,
+      stopReason: payload?.stop_reason
+    };
   }
 
-  // Chord placement from the AI's own word-by-word list, then from the source's exact layout
-  // where there is one; and no voicing charts.
+  // Chord placement from the AI's own word-by-word list (for photos), then from the source's
+  // exact layout where there is one; and no voicing charts.
   // deno-lint-ignore no-explicit-any
   function tidySheet(sheet: any) {
     if (!sheet || !Array.isArray(sheet.sections)) return;
     sheet.sections = sheet.sections.filter((sec: { label?: string | null }) => !NOT_SONG_SECTION.test(sec.label || ""));
-    applyPlacementNotes(sheet.sections);
+    if (withPlacement) applyPlacementNotes(sheet.sections);
     const exact = layout.length
       ? layout
       : (sheet.monospaced === true && typeof sheet.source_text === "string"
@@ -1410,43 +857,25 @@ Deno.serve(async (req: Request) => {
     tidySheet(attempt.toolInput);
     let problems = validateSheetOutput(attempt.toolInput);
     await logAiCall(supabase, focus ? "cb_import_more" : "cb_import", model, problems.length === 0, attempt.ms, attempt.usage, userId);
-    if (problems.length > 0 && attempt.toolInput) {
-      messages.push({
-        role: "assistant",
-        content: [{ type: "tool_use", id: "repair_1", name: "save_chord_sheet", input: attempt.toolInput }]
-      });
-      messages.push({
+    if (problems.length > 0 && attempt.toolInput && attempt.toolId) {
+      // Send the AI's reply back unchanged: with thinking models, a rebuilt or edited turn is
+      // rejected. tidySheet worked on a copy, so attempt.content is still the original.
+      // deno-lint-ignore no-explicit-any
+      const repair: any[] = [...attempt.history, { role: "assistant", content: attempt.content }];
+      repair.push({
         role: "user",
         content: [{
           type: "tool_result",
-          tool_use_id: "repair_1",
+          tool_use_id: attempt.toolId,
           content: `Validation failed: ${problems.join("; ")}. Fix every problem and call save_chord_sheet again.`
         }]
       });
-      attempt = await callClaude(messages);
+      attempt = await callClaude(repair);
       tidySheet(attempt.toolInput);
       problems = validateSheetOutput(attempt.toolInput);
       await logAiCall(supabase, "cb_import_repair", model, problems.length === 0, attempt.ms, attempt.usage, userId);
     }
     return { sheet: attempt.toolInput, problems: attempt.toolInput ? problems : ["No sheet returned"] };
-  }
-
-  // deno-lint-ignore no-explicit-any
-  function resultFor(sheet: any) {
-    const tempo = Number(sheet.tempo);
-    return {
-      title: sheet.title,
-      artist: sheet.artist,
-      key: sheet.key,
-      capo: sheet.capo || 0,
-      tempo: tempo >= 20 && tempo <= 300 ? Math.round(tempo) : null,
-      time_signature: sheet.time_signature || "4/4",
-      tuning: TUNING_VALUES[sheet.tuning] || TUNING_VALUES.standard,
-      genre: GENRES.includes(sheet.genre) ? sheet.genre : "pop",
-      form: typeof sheet.form === "string" ? sheet.form.replace(/^form:\s*/i, "").trim() : "",
-      notes: sheet.notes,
-      chordpro: sheetToChordPro(sheet)
-    };
   }
 
   try {
@@ -1457,7 +886,7 @@ Deno.serve(async (req: Request) => {
     const results = [resultFor(first.sheet)];
 
     // A set list PDF or several photos can hold more songs. Read them side by side so the
-    // whole import stays well inside the function's time limit.
+    // whole import stays well inside the function's time limit (and hits the cached PDF block).
     const others = (Array.isArray(first.sheet.other_songs) ? first.sheet.other_songs : [])
       .filter((t: unknown) => typeof t === "string" && t.trim())
       .slice(0, MAX_SONGS_PER_IMPORT - 1);
@@ -1478,7 +907,6 @@ Deno.serve(async (req: Request) => {
     if (msg === "BUSY") return json({ error: "The AI is busy right now. Try again in a minute." });
     if (msg === "NO_CREDIT") return json({ error: "The AI account has hit its spending limit. Raise it in the Anthropic console." });
     if (msg === "FILTERED") return json({ error: "The AI won’t copy out the words of this song. Paste the song as text and the app will format it without AI." });
-    // The API's own reason (never secret) helps the owner see what went wrong.
     const reason = msg.startsWith("API:") ? ` (${msg.slice(4)})` : "";
     return json({ error: `The AI couldn’t read that${reason}. Try again, or the app can format it without AI.` });
   }

@@ -3,6 +3,11 @@
 // in js/core.js (testing-skills/melody_test.py checks it). Add a line here with every release.
 
 export const REVISIONS = [
+  { version: "0.7.0", date: "2026-11-25", notes: [
+    "Ultimate Guitar links are built straight from the page: every chord exactly where the site puts it, each chorus checked on its own, playing cues like “Palm muted” as notes.",
+    "Anything messy (photos, screenshots, phone copies) still goes to the AI, now Claude Sonnet 5.5.",
+    "Set list PDFs import more cheaply: the PDF is sent once and reused for each song."
+  ] },
   { version: "0.6.6", date: "2026-11-25", notes: [
     "Range first: a song is judged by the notes it needs, not its key. Bad fit lists only songs you rated hard and songs whose notes run past your range.",
     "Suggested keys leave room at both ends of your range (up to a whole step), with the smallest move that does it.",

@@ -26,10 +26,18 @@
 2. Open [supabase/sql/v0.1-init.sql](file:///Users/erikstrock/Desktop/myStuff/Apps/Chord-Book/supabase/sql/v0.1-init.sql) directly from disk, copy its contents, paste into the SQL Editor, and click **Run**.
    - This creates `cb_songs`, `cb_setlists`, `cb_setlist_items`, `cb_song_shares`, `cb_song_revisions`, and their `private.cb_*` RLS policies. It is 100% idempotent and does not alter any House Index tables.
 
-### Step 2: Deploy the `import-sheet` Edge Function (for Snips, Camera Photos, PDFs & AI Align)
-1. In your Supabase dashboard → **Edge Functions** → click **Deploy a new function** → name it `import-sheet`.
-2. Paste the contents of [supabase/functions/import-sheet/index.ts](file:///Users/erikstrock/Desktop/myStuff/Apps/Chord-Book/supabase/functions/import-sheet/index.ts) and deploy.
-   - Because it shares your House Index project, `ANTHROPIC_API_KEY`, `SUPABASE_PUBLISHABLE_KEYS`, `increment_ai_usage`, and `log_ai_call` are already configured and ready.
+### Step 2: Deploy the `import-sheet` Edge Function (for Snips, Camera Photos, PDFs, Links & AI Align)
+`import-sheet` is one Edge Function written as five modules in `supabase/functions/import-sheet/` (`index.ts`, `chord_net.ts`, `layout.ts`, `ug.ts`, `pdf.ts`). Deploy it either way:
+
+- **Dashboard paste (no setup):** in Supabase → **Edge Functions** → `import-sheet`, replace the code with the whole of [supabase/paste/import-sheet.ts](supabase/paste/import-sheet.ts) and deploy. That file is the five modules joined into one; after changing a module, rebuild it with `python3 scripts/bundle_import_sheet.py` (the policy test fails while it's out of date).
+- **Supabase CLI (one-time login + link):**
+  ```bash
+  supabase login
+  supabase link --project-ref <your-house-index-project-ref>
+  supabase functions deploy import-sheet
+  ```
+- Because it shares your House Index project, `ANTHROPIC_API_KEY`, `SUPABASE_PUBLISHABLE_KEYS`, `increment_ai_usage`, and `log_ai_call` are already configured.
+- **Optional Haiku 5.5 melody trial:** Melody lookups default to `claude-sonnet-5-5`. To trial `claude-haiku-5-5` for `type: "melody"`, set `supabase secrets set CB_MELODY_MODEL=claude-haiku-5-5` (and unset or set back to `claude-sonnet-5-5` to revert).
 
 ### Step 3: Push to Your New GitHub Repository & Enable GitHub Pages
 1. Create a new public repository on GitHub (e.g., `Chord-Book`).
@@ -113,8 +121,10 @@ select
   round(
     sum(
       case
-        when model like '%sonnet%' then (coalesce(input_tokens,0) * 3.0 + coalesce(output_tokens,0) * 15.0) / 1e6
-        else (coalesce(input_tokens,0) * 0.8 + coalesce(output_tokens,0) * 4.0) / 1e6
+        when model like '%sonnet-5%' then (coalesce(input_tokens,0) * 2.0 + coalesce(cache_read_tokens,0) * 0.2 + coalesce(output_tokens,0) * 10.0) / 1e6
+        when model like '%sonnet%' then (coalesce(input_tokens,0) * 3.0 + coalesce(cache_read_tokens,0) * 0.3 + coalesce(output_tokens,0) * 15.0) / 1e6
+        when model like '%haiku-5%' then (coalesce(input_tokens,0) * 0.10 + coalesce(cache_read_tokens,0) * 0.01 + coalesce(output_tokens,0) * 0.50) / 1e6
+        else (coalesce(input_tokens,0) * 1.0 + coalesce(output_tokens,0) * 5.0) / 1e6
       end
     )::numeric, 4
   ) as est_usd
