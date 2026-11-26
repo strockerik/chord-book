@@ -51,7 +51,11 @@ import {
   melodyFromSung,
   melodyFromRecording,
   getVocalRange,
-  rangeFit
+  rangeFit,
+  originalMelody,
+  shiftFromOriginal,
+  sheetKeyMismatch,
+  melodyAfterKeyFix
 } from "./melody.js";
 
 let activeSong = null;
@@ -246,11 +250,50 @@ export function initSongController({ onSaveSong, onDeleteSong, getLibrarySongs }
   // Melody range: the pickers show the notes as sung in the key on screen now.
   const lowPick = document.getElementById("melody-low-select");
   const highPick = document.getElementById("melody-high-select");
-  const noteOptions = `<option value="">—</option>` +
-    Array.from({ length: NOTE_HIGHEST - NOTE_LOWEST + 1 }, (_, i) => NOTE_LOWEST + i)
-      .map((m) => `<option value="${m}">${midiToNote(m)}</option>`).join("");
+  const noteOptions = noteOptionsHTML();
   if (lowPick) lowPick.innerHTML = noteOptions;
   if (highPick) highPick.innerHTML = noteOptions;
+
+  // The original recording: shown for checking, editable when the AI got it wrong.
+  const origKey = document.getElementById("original-key-select");
+  const origLow = document.getElementById("original-low-select");
+  const origHigh = document.getElementById("original-high-select");
+  if (origKey) origKey.innerHTML = [...ALL_MAJOR_KEYS, ...ALL_MINOR_KEYS].map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join("");
+  if (origLow) origLow.innerHTML = noteOptions;
+  if (origHigh) origHigh.innerHTML = noteOptions;
+  const origEditor = document.getElementById("melody-original-editor");
+  document.getElementById("edit-original-btn")?.addEventListener("click", () => {
+    if (!activeSong || !origEditor) return;
+    const o = originalMelody(songAsShown());
+    const sung = sungRange(songAsShown());
+    if (origKey) origKey.value = o?.key || normalizeKeyName(activeSong.key || "G");
+    if (origLow) origLow.value = String(o?.low ?? sung?.low ?? "");
+    if (origHigh) origHigh.value = String(o?.high ?? sung?.high ?? "");
+    origEditor.hidden = false;
+  });
+  document.getElementById("cancel-original-btn")?.addEventListener("click", () => {
+    if (origEditor) origEditor.hidden = true;
+  });
+  document.getElementById("save-original-btn")?.addEventListener("click", () => {
+    if (!activeSong) return;
+    const low = parseInt(origLow?.value || "", 10);
+    const high = parseInt(origHigh?.value || "", 10);
+    if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) {
+      toastError("Pick a highest note above the lowest.");
+      return;
+    }
+    const shown = songAsShown();
+    const current = viewState.melody;
+    const fromOriginal = melodyFromRecording(shown, { recording_key: origKey?.value, low, high, confidence: null }, "you");
+    // A range you set for this sheet stays yours; otherwise it's worked out again from the original.
+    viewState.melody = current?.source === "you" && storedMelody(shown)
+      ? { ...current, original: fromOriginal.original, recording_key: fromOriginal.recording_key }
+      : fromOriginal;
+    if (origEditor) origEditor.hidden = true;
+    viewState.isDirty = true;
+    refreshSongToolbar();
+    toast("Original recording saved.");
+  });
   const onMelodyPick = () => {
     if (!activeSong) return;
     const low = parseInt(lowPick.value, 10);
@@ -755,15 +798,75 @@ function refreshMelodyPickers() {
   const inList = (m) => (m >= NOTE_LOWEST && m <= NOTE_HIGHEST ? String(m) : "");
   lowPick.value = sung ? inList(sung.low) : "";
   highPick.value = sung ? inList(sung.high) : "";
+  const soundsIn = soundingKeyWithTuning(
+    transposeKey(normalizeKeyName(shown.key || parse(shown.chordpro || "").meta.key || parse(shown.chordpro || "").meta.inferredKey || "G"), viewState.semitoneDelta, viewState.accidentalPref),
+    viewState.capo, viewState.tuning, viewState.accidentalPref
+  );
+  const m = storedMelody(shown);
   if (hint) {
-    const m = storedMelody(shown);
-    const original = m?.recordingKey ? ` The original recording is in ${m.recordingKey}.` : "";
     hint.textContent = !m
-      ? "Lowest and highest notes of the melody, as you sing it in this key. Look up asks the AI."
+      ? `This sheet sounds in ${soundsIn}. Pick the lowest and highest notes you sing, or Look up asks the AI.`
       : m.source === "ai"
-        ? `AI estimate from the recording${m.confidence === "low" ? " (unsure)" : ""}.${original} Change either note if it’s off.`
-        : `Set by you, for the key on screen.${original}`;
+        ? `This sheet sounds in ${soundsIn}. AI estimate${m.confidence === "low" ? " (unsure)" : ""}; change either note if it’s off.`
+        : `This sheet sounds in ${soundsIn}. Set by you.`;
   }
+
+  // The original recording, to check the AI against.
+  const origRow = document.getElementById("melody-original-row");
+  const origText = document.getElementById("melody-original-text");
+  const o = originalMelody(shown);
+  if (origRow && origText) {
+    origRow.hidden = !m && !o;
+    if (o) {
+      const d = shiftFromOriginal(shown);
+      const how = d === null ? "" : d === 0 ? " Same key as this sheet." : ` This sheet is ${Math.abs(d)} half step${Math.abs(d) === 1 ? "" : "s"} ${d < 0 ? "lower" : "higher"}.`;
+      origText.textContent = `Original recording (${o.key}): ${rangeText(o)}.${how}`;
+    } else {
+      origText.textContent = "Original recording: not known yet.";
+    }
+  }
+
+  // The sheet's key label against its chords: a quiet hint, never an automatic change.
+  const keyHint = document.getElementById("key-mismatch-hint");
+  if (keyHint) {
+    const mismatch = sheetKeyMismatch(activeSong);
+    keyHint.hidden = !mismatch;
+    if (mismatch) {
+      keyHint.innerHTML = `The chords look like <strong>${esc(mismatch.chords)}</strong>, but this sheet’s key is set to ${esc(mismatch.written)}. <button type="button" class="ghost-btn small-btn" id="fix-sheet-key-btn">Use ${esc(mismatch.chords)}</button>`;
+      document.getElementById("fix-sheet-key-btn")?.addEventListener("click", () => fixSheetKey(mismatch.chords));
+    }
+  }
+}
+
+function noteOptionsHTML() {
+  return `<option value="">—</option>` +
+    Array.from({ length: NOTE_HIGHEST - NOTE_LOWEST + 1 }, (_, i) => NOTE_LOWEST + i)
+      .map((n) => `<option value="${n}">${midiToNote(n)}</option>`).join("");
+}
+
+// The key label was wrong but the chords are right: fix the label (and the {key:} line), keep the
+// notes you sing, and work the recording's shift out again. With Undo.
+async function fixSheetKey(newKey) {
+  if (!activeSong || !onSaveSongCallback) return;
+  flushAutosave();
+  const previousSnapshot = JSON.parse(JSON.stringify(activeSong));
+  const melody = melodyAfterKeyFix(songAsShown(), newKey);
+  const chordpro = /\{\s*key\s*:[^}]*\}/i.test(activeSong.chordpro || "")
+    ? activeSong.chordpro.replace(/\{\s*key\s*:[^}]*\}/i, `{key: ${newKey}}`)
+    : activeSong.chordpro;
+  const prefs = { ...(activeSong.layout_prefs || {}) };
+  if (melody) prefs.melody = melody;
+  const updated = { ...activeSong, key: newKey, chordpro, layout_prefs: prefs, updated_at: new Date().toISOString() };
+  activeSong = updated;
+  viewState.melody = melody || viewState.melody;
+  await onSaveSongCallback(updated, { isUpdate: true });
+  refreshSongView();
+  toastAction(`Key set to ${newKey}`, "Undo", async () => {
+    cancelAutosave();
+    activeSong = previousSnapshot;
+    await onSaveSongCallback(previousSnapshot, { isUpdate: true });
+    openSongView(previousSnapshot, { discardPending: true });
+  });
 }
 
 function renderSmartAdvisorBanner(parsed, currentShapesKey, soundingKey) {
@@ -1028,9 +1131,13 @@ async function bakeTransposedKeyIntoChordPro({ clearRating = false } = {}) {
   // The melody moves with the sheet, so you still sing the same notes.
   const melodyNow = storedMelody(songAsShown());
   if (melodyNow) {
-    const { source, confidence, recordingKey } = melodyNow;
-    viewState.melody = { low: melodyNow.low + viewState.semitoneDelta, high: melodyNow.high + viewState.semitoneDelta, key: newKey, source, confidence };
-    if (recordingKey) viewState.melody.recording_key = recordingKey;
+    // Same notes against the new key; the original recording stays exactly as it was.
+    viewState.melody = {
+      ...(viewState.melody || activeSong.layout_prefs?.melody || {}),
+      low: melodyNow.low + viewState.semitoneDelta,
+      high: melodyNow.high + viewState.semitoneDelta,
+      key: newKey
+    };
     updated.layout_prefs = { ...(updated.layout_prefs || {}), melody: viewState.melody };
   }
 

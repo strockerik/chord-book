@@ -3,6 +3,12 @@
 // in js/core.js (testing-skills/melody_test.py checks it). Add a line here with every release.
 
 export const REVISIONS = [
+  { version: "0.7.1", date: "2026-11-26", notes: [
+    "Each song keeps the original recording’s key and notes next to this sheet’s range (More → Singing and tuning), so you can check the AI and fix it.",
+    "Melody lookups use the key a recording actually sounds in: a song played half a step down is no longer off by a half step.",
+    "A quiet hint when a sheet’s key label doesn’t match its chords, with a one-tap fix that keeps the range right.",
+    "Older AI ranges are looked up again to fill in the original; ranges you set are never touched."
+  ] },
   { version: "0.7.0", date: "2026-11-25", notes: [
     "Ultimate Guitar links are built straight from the page: every chord exactly where the site puts it, each chorus checked on its own, playing cues like “Palm muted” as notes.",
     "Anything messy (photos, screenshots, phone copies) still goes to the AI, now Claude Sonnet 5.5.",

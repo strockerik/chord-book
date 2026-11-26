@@ -238,6 +238,8 @@ def main():
     check("The repair turn sends the AI's reply back unchanged, with its real tool id",
           'role: "assistant", content: attempt.content' in index_src and "tool_use_id: attempt.toolId" in index_src
           and 'id: "repair_1"' not in index_src and "structuredClone(toolBlock.input)" in index_src)
+    check("The melody lookup asks for the key the recording sounds in, the same pitch as its notes",
+          "concert pitch" in index_src and "sounds in Cm" in index_src)
     check("A melody reply without the tool call is an error, not every song unknown",
           "The AI didn’t send the melody ranges back" in index_src)
     bundle = subprocess.run([sys.executable, str(ROOT / "scripts" / "bundle_import_sheet.py"), "--check"], capture_output=True, text=True)

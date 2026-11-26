@@ -159,10 +159,16 @@ export async function findMelodyRanges(list, { quiet = false } = {}) {
     applyMelodyToOpenSong(cur.id, melody);
     found++;
   }
-  // Songs the AI doesn't know aren't asked about again automatically.
+  // Songs the AI doesn't know aren't asked about again automatically. A song that already has a
+  // range keeps it; it's only marked so the refresh doesn't ask again.
   for (const id of res.unknownIds || []) {
     const cur = songs.find((s) => s.id === id);
-    if (cur && !storedMelody(cur)) await saveSong({ ...cur, layout_prefs: { ...(cur.layout_prefs || {}), melody_unknown: true } }, { isUpdate: true });
+    if (!cur) continue;
+    const prefs = { ...(cur.layout_prefs || {}) };
+    if (storedMelody(cur)) prefs.melody = { ...prefs.melody, original_unknown: true };
+    else prefs.melody_unknown = true;
+    await saveSong({ ...cur, layout_prefs: prefs }, { isUpdate: true });
+    if (prefs.melody) applyMelodyToOpenSong(cur.id, prefs.melody);
   }
   const unknown = (res.unknownIds || []).length;
   if (res.error) {

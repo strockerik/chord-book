@@ -1783,7 +1783,7 @@ const MELODY_SCHEMA = {
         properties: {
           id: { type: "string", description: "The id given for this song" },
           known: { type: "boolean", description: "True only if you know this song's sung melody well enough to name its lowest and highest notes" },
-          recording_key: { type: ["string", "null"], description: "Key of the recording the notes come from, e.g. 'A', 'F#m', 'Bb'" },
+          recording_key: { type: ["string", "null"], description: "Key the recording sounds in (concert pitch, the same pitch as the notes), e.g. 'A', 'F#m', 'Bb'; for a half-step-down recording in C#m shapes this is 'Cm'" },
           low_note: { type: ["string", "null"], description: "Lowest note of the lead vocal melody in scientific pitch, where C4 is middle C, e.g. 'A2', 'F#3'" },
           high_note: { type: ["string", "null"], description: "Highest note of the lead vocal melody, e.g. 'E4', 'Bb4'" },
           confidence: { type: "string", enum: ["high", "medium", "low"] }
@@ -1800,6 +1800,7 @@ const MELODY_PROMPT = `You know the melodies of popular songs, hymns, and worshi
 - Use the best-known recording by the named artist. For a hymn, use the melody in its usual hymnal key.
 - Count the main melody the lead singer sings, including chorus peaks and a final chorus that goes up. Leave out brief ad-libs, shouts, spoken parts, and backing vocals.
 - Write notes in scientific pitch, where C4 is middle C. A man's melody usually sits between about G2 and A4, a woman's between about F3 and E5.
+- The key and the notes must be in the same pitch: the key the recording actually sounds in (concert pitch), not the chord shapes a guitarist plays. A band tuned down a half step that plays C#m shapes sounds in Cm, so give Cm and the notes as heard. A capo works the same way: G shapes with a capo on 2 sound in A.
 - The sheet's key is a hint for which arrangement is meant; the notes are still the recording's.
 - If you don't know a song's melody well enough to name its notes, set known false and the notes null. Never guess from the title alone.`;
 

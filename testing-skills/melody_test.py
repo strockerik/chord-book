@@ -71,7 +71,8 @@ const lib = [
 const r = m.deriveVocalRange(lib);
 ok("Your range comes from the songs you sing well", r && r.low === 45 && r.high === 67 && r.stretchHigh === 70, JSON.stringify(r));
 ok("Fewer than two rated songs with a melody gives no range", m.deriveVocalRange([lib[0]]) === null);
-ok("Songs still missing a melody are listed for lookup", m.songsMissingMelody(lib).map((x) => x.id).join() === "4");
+ok("Songs still missing a melody (or an old AI range without the original) are listed for lookup",
+   m.songsMissingMelody(lib).map((x) => x.id).join() === "3,4", m.songsMissingMelody(lib).map((x) => x.id).join());
 
 const rec = a.getIdealVocalRangeRecommendations(lib[2], lib);
 ok("A too-high song moves to the key that leaves room at both ends of your range",
@@ -101,9 +102,58 @@ const page = a.renderAnalyticsDashboardHTML(lib);
 ok("My Keys shows your range", page.includes("Your vocal range") && page.includes("A2–G4"));
 ok("Bad fit lists the too-high song with the notes it would sing",
    /Bad fit \(1\)/.test(page) && /Sings D3–A#4 • Rewrite in Ab to sing A#2–F#4/.test(page), page.match(/fit-song-sub">[^<]*/g));
-ok("My Keys offers to look up the missing melody", page.includes("Look up 1 melody range with AI"));
+ok("My Keys offers to look up the missing melodies", page.includes("Look up 2 melody ranges with AI"));
 ok("What's new lists this release first", REVISIONS[0]?.version === APP_VERSION && REVISIONS[0].notes.length > 0,
    `${REVISIONS[0]?.version} vs ${APP_VERSION}`);
+// Original recording and this sheet, side by side. Made-up songs; the numbers are what matter.
+const progression = (chords) => `{title: T}\n\n{start_of_verse}\n` +
+  Array.from({ length: 3 }, () => chords.map((c) => `[${c}]la`).join(" ")).join("\n") + "\n{end_of_verse}";
+// A band tuned down a half step plays C#m shapes, so the recording sounds in Cm (G3–G4).
+// This sheet is in Am, standard tuning: 3 half steps lower.
+const ain = { id: "a1", title: "Half Step Song", key: "Am", capo: 0, chordpro: progression(["Am", "G", "F", "C"]), layout_prefs: {} };
+ain.layout_prefs.melody = m.melodyFromRecording(ain, { recording_key: "Cm", low: 55, high: 67, confidence: "high" });
+const ainSung = m.sungRange(ain);
+ok("The original recording is saved exactly as the AI gave it",
+   JSON.stringify(m.originalMelody(ain)) === JSON.stringify({ key: "Cm", low: 55, high: 67, source: "ai", confidence: "high" }), JSON.stringify(ain.layout_prefs.melody));
+ok("A sheet 3 half steps below the original sings 3 half steps lower",
+   ainSung.low === 52 && ainSung.high === 64 && m.shiftFromOriginal(ain) === -3, JSON.stringify({ ainSung, d: m.shiftFromOriginal(ain) }));
+const same = { id: "a2", title: "Same", key: "F", capo: 2, chordpro: progression(["F", "C", "Dm", "Bb"]), layout_prefs: {} };
+same.layout_prefs.melody = m.melodyFromRecording(same, { recording_key: "G", low: 50, high: 64 });
+ok("A sheet that sounds in the original key (F shapes, capo 2 = G) sings the original notes",
+   m.sungRange(same).low === 50 && m.sungRange(same).high === 64 && m.shiftFromOriginal(same) === 0);
+const half = { id: "a3", title: "Tuned Down", key: "C#m", capo: 0, tuning: "Eb Ab Db Gb Bb Eb", chordpro: progression(["C#m", "B", "A", "E"]), layout_prefs: {} };
+half.layout_prefs.melody = m.melodyFromRecording(half, { recording_key: "Cm", low: 55, high: 67 });
+ok("C#m shapes tuned down a half step sound in Cm: the original notes, no shift",
+   m.sungRange(half).low === 55 && m.shiftFromOriginal(half) === 0, JSON.stringify(m.sungRange(half)));
+const moved = { ...ain, capo: 2, preferred_transpose: -1 };
+ok("Capo and transpose move this sheet's notes but never the original",
+   m.originalMelody(moved).low === 55 && m.sungRange(moved).low === 53 && m.shiftFromOriginal(moved) === -2);
+const handSet = m.melodyFromSung(ain, 50, 62);
+ok("Setting this sheet's notes by hand keeps the original recording", handSet.source === "you" && handSet.original?.key === "Cm" && handSet.original.low === 55);
+
+// Old AI ranges (saved before originals were kept) get looked up again; yours never do.
+const oldAi = { id: "o1", title: "Old", key: "G", chordpro: progression(["G", "C", "D", "Em"]), layout_prefs: { melody: { low: 45, high: 62, key: "G", source: "ai", recording_key: "G" } } };
+const oldYou = { ...oldAi, id: "o2", layout_prefs: { melody: { low: 45, high: 62, key: "G", source: "you" } } };
+const oldUnknown = { ...oldAi, id: "o3", layout_prefs: { melody: { ...oldAi.layout_prefs.melody, original_unknown: true } } };
+const refresh = m.songsMissingMelody([oldAi, oldYou, oldUnknown, ain]).map((x) => x.id).join();
+ok("Old AI ranges without the original are looked up again; ranges you set are left alone", refresh === "o1", refresh);
+ok("An old range still works while it waits for the refresh", m.sungRange(oldAi).low === 45);
+
+// The sheet's key label against its chords.
+const wrongLabel = { id: "k1", title: "Wrong", key: "E", chordpro: progression(["Am", "G", "F", "C"]), layout_prefs: {} };
+const mm = m.sheetKeyMismatch(wrongLabel);
+ok("Chords in Am under a key of E are flagged, with a key that fits the chords",
+   mm && mm.written === "E" && mm.chords === "Am", JSON.stringify(mm));
+ok("Am and C count as the same key (same chords): no flag",
+   m.sheetKeyMismatch({ ...wrongLabel, key: "C" }) === null && m.sheetKeyMismatch({ ...wrongLabel, key: "Am" }) === null);
+ok("A song that borrows a chord (D, C, G in D) isn't flagged",
+   m.sheetKeyMismatch({ ...wrongLabel, key: "D", chordpro: progression(["D", "C", "G", "D"]) }) === null);
+wrongLabel.layout_prefs.melody = m.melodyFromRecording(wrongLabel, { recording_key: "Cm", low: 55, high: 67 });
+const fixedMelody = m.melodyAfterKeyFix(wrongLabel, "Am");
+const fixedSong = { ...wrongLabel, key: "Am", layout_prefs: { melody: fixedMelody } };
+ok("Fixing a wrong key label works the range out again from the original",
+   m.sungRange(fixedSong).low === 52 && m.originalMelody(fixedSong).low === 55, JSON.stringify(m.sungRange(fixedSong)));
+
 document.getElementById("out").textContent = JSON.stringify(results);
 """
 

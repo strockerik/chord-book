@@ -4,12 +4,16 @@
 // sheet is written in (no capo, standard tuning), so transposing, a capo, or a half-step-down
 // tuning move them along with the chords:
 //   { low: 45, high: 64, key: "G", source: "ai" | "you", confidence?: "high"|"medium"|"low",
-//     recording_key?: "A" }   (the key of the original recording the AI took the notes from)
+//     recording_key?: "A",
+//     original?: { key: "A", low: 47, high: 66, source: "ai" | "you", confidence } }
+// `low`/`high`/`key` are the one saved source for this sheet; what you sing now is worked out from
+// them (sungRange), never saved separately. `original` is the recording's own key and notes in
+// concert pitch, kept as a reference that never moves when the sheet is transposed or rewritten.
 // Notes are MIDI numbers (60 = middle C, C4). Singers choose their octave (a man sings a woman's
 // song an octave down), so fitting a song to a voice tries the octave above and below too.
 
 import { loadLocal, saveLocal } from "./core.js";
-import { NOTE_TO_PITCH, normalizeKeyName, transposeKey, getTuning, getKeyCenter } from "./chords.js";
+import { NOTE_TO_PITCH, normalizeKeyName, transposeKey, getTuning, getKeyCenter, parseChord, inferKeyFromChords } from "./chords.js";
 import { parse } from "./chordpro.js";
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -55,6 +59,13 @@ export function soundingShift(song) {
   return Number(song?.preferred_transpose || 0) + b.capo + b.tuningOffset;
 }
 
+/** The original recording's key and notes (concert pitch), or null when not known. */
+export function originalMelody(song) {
+  const o = song?.layout_prefs?.melody?.original;
+  if (!o || !o.key || !Number.isFinite(o.low) || !Number.isFinite(o.high) || o.high <= o.low) return null;
+  return { key: o.key, low: o.low, high: o.high, source: o.source || "ai", confidence: o.confidence || null };
+}
+
 /** The stored melody, moved to the sheet's current written key, or null. */
 export function storedMelody(song) {
   const m = song?.layout_prefs?.melody;
@@ -81,9 +92,10 @@ export function sungRange(song) {
 export function melodyFromSung(song, low, high, source = "you") {
   const shift = soundingShift(song);
   const melody = { low: low - shift, high: high - shift, key: sheetBasics(song).writtenKey, source };
-  // Correcting the notes by hand doesn't change which key the original recording is in.
-  const recordingKey = song?.layout_prefs?.melody?.recording_key;
-  if (recordingKey) melody.recording_key = recordingKey;
+  // Correcting this sheet's notes by hand doesn't change the original recording.
+  const prev = song?.layout_prefs?.melody;
+  if (prev?.recording_key) melody.recording_key = prev.recording_key;
+  if (prev?.original) melody.original = prev.original;
   return melody;
 }
 
@@ -91,19 +103,104 @@ export function melodyFromSung(song, low, high, source = "you") {
  * The AI's notes come from the recording, in its key. The sheet as written (with its capo and
  * tuning) may sit in another key, so move the notes to the sheet first.
  */
-export function melodyFromRecording(song, { recording_key, low, high, confidence }) {
+export function melodyFromRecording(song, { recording_key, low, high, confidence }, source = "ai") {
   const b = sheetBasics(song);
   const soundsAt = transposeKey(b.writtenKey, b.capo + b.tuningOffset);
   const toSheet = recording_key ? keyInterval(recording_key, soundsAt) : 0;
   const shift = toSheet - b.capo - b.tuningOffset;
+  const key = recording_key ? normalizeKeyName(recording_key) : null;
   return {
     low: low + shift,
     high: high + shift,
     key: b.writtenKey,
-    source: "ai",
+    source,
     confidence: confidence || null,
-    recording_key: recording_key ? normalizeKeyName(recording_key) : null
+    recording_key: key,
+    // The recording as the AI (or you) gave it: the reference that never moves.
+    original: key ? { key, low, high, source, confidence: confidence || null } : null
   };
+}
+
+/** Half steps from the original recording to what you sing on this sheet now, or null. */
+export function shiftFromOriginal(song) {
+  const o = originalMelody(song);
+  const sung = sungRange(song);
+  if (!o || !sung) return null;
+  // Compare the bottom notes in the octave nearest the original (singers pick their octave).
+  const d = sung.low - o.low;
+  return d - Math.round(d / 12) * 12;
+}
+
+// ---------------------------------------------------------------------------
+// Does the sheet's key match its chords?
+// ---------------------------------------------------------------------------
+const MAJOR_TRIADS = { 0: "maj", 2: "min", 4: "min", 5: "maj", 7: "maj", 9: "min", 11: "dim" };
+
+function chordFitsKey(chord, center) {
+  const p = parseChord(chord);
+  if (!p || p.isNC) return null;
+  const rel = (((NOTE_TO_PITCH[p.root] ?? 0) - center) % 12 + 12) % 12;
+  const q = p.quality || "";
+  const kind = /^(dim|°|ø|m7b5)/.test(q) ? "dim" : (/^m(?!aj)|^min|^-/.test(q) ? "min" : "maj");
+  const want = MAJOR_TRIADS[rel];
+  return want === kind || (want === "dim" && kind === "min");
+}
+
+/**
+ * The sheet's key and the key its chords point to, when they clearly disagree; otherwise null.
+ * Relative keys count as one (Am and C share their chords). Quiet on purpose: songs that borrow a
+ * chord or two (D–C–G in D) stay unflagged, and only a clear winner is suggested.
+ */
+export function sheetKeyMismatch(song) {
+  const parsed = parse(song?.chordpro || "");
+  // Every chord as it's played (allChords lists each name once).
+  const chords = [];
+  for (const sec of parsed.sections || []) {
+    for (const line of sec.lines || []) {
+      for (const seg of line.segments || []) {
+        const pc = seg.chord && parseChord(seg.chord);
+        if (pc && !pc.isNC) chords.push(seg.chord);
+      }
+    }
+  }
+  if (chords.length < 8 || new Set(chords).size < 3) return null;
+  const written = sheetBasics(song).writtenKey;
+  const fit = (center) => chords.filter((c) => chordFitsKey(c, center)).length / chords.length;
+  const writtenCenter = getKeyCenter(written).pitch;
+  let best = { center: writtenCenter, score: fit(writtenCenter) };
+  for (let c = 0; c < 12; c++) {
+    const score = fit(c);
+    if (score > best.score) best = { center: c, score };
+  }
+  if (best.center === writtenCenter || fit(writtenCenter) >= 0.5 || best.score < 0.85) return null;
+  // Name it the way the song does: a song that opens on the minor home chord (Am in C/Am) is in
+  // the minor key; one that opens on the major home chord is major; otherwise the best guess.
+  const center = getKeyCenter(transposeKey("C", best.center));
+  const first = parseChord(chords[0]);
+  const firstPitch = NOTE_TO_PITCH[first.root];
+  const firstMinor = /^m(?!aj)|^min|^-/.test(first.quality || "");
+  let named;
+  if (firstMinor && firstPitch === (best.center + 9) % 12) named = center.minor;
+  else if (!firstMinor && firstPitch === best.center) named = center.major;
+  else {
+    const guess = inferKeyFromChords(chords);
+    named = getKeyCenter(guess).pitch === best.center ? guess : center.major;
+  }
+  return { written, chords: normalizeKeyName(named) };
+}
+
+/**
+ * The sheet's key label was wrong, but its chords didn't move: re-anchor the melody so you still
+ * sing the same notes, and work the recording's shift out again from the original when known.
+ */
+export function melodyAfterKeyFix(song, newKey) {
+  const m = song?.layout_prefs?.melody;
+  if (!m) return null;
+  const fixed = { ...song, key: newKey };
+  const o = originalMelody(song);
+  if (o && m.source !== "you") return melodyFromRecording(fixed, { recording_key: o.key, low: o.low, high: o.high, confidence: o.confidence }, o.source);
+  const now = sungRange(song);
+  return now ? { ...melodyFromSung(fixed, now.low, now.high, m.source || "you"), source: m.source || "you" } : m;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +294,16 @@ export function bestRangeShift(sung, range, soundingKey, idealPitches = [], shif
   return best;
 }
 
-/** Songs that still need a melody range, for the AI lookup. */
+/**
+ * Songs that need the AI lookup: no melody yet, or an AI range saved before the original
+ * recording's notes were kept (looked up again to fill them in; ranges you set are never touched,
+ * and a failed or unknown lookup leaves the old range as it was).
+ */
 export function songsMissingMelody(songs = []) {
-  return songs.filter((s) => s?.id && s.title && !storedMelody(s) && !s.layout_prefs?.melody_unknown);
+  return songs.filter((s) => {
+    if (!s?.id || !s.title) return false;
+    const m = s.layout_prefs?.melody;
+    if (!storedMelody(s)) return !s.layout_prefs?.melody_unknown;
+    return (m.source || "ai") === "ai" && !originalMelody(s) && !m.original_unknown;
+  });
 }

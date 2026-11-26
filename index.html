@@ -209,6 +209,21 @@
         </span>
       </div>
       <p class="more-hint" id="melody-hint">Lowest and highest notes of the melody, as you sing it in this key.</p>
+      <div class="melody-original" id="melody-original-row" hidden>
+        <p class="melody-original-text" id="melody-original-text"></p>
+        <button type="button" class="ghost-btn small-btn" id="edit-original-btn">Edit</button>
+      </div>
+      <div class="melody-original-editor" id="melody-original-editor" role="group" aria-label="Original recording" hidden>
+        <label>Original key <select id="original-key-select" class="input-select small-select"></select></label>
+        <label>Lowest <select id="original-low-select" class="input-select small-select" aria-label="Original lowest note"></select></label>
+        <label>Highest <select id="original-high-select" class="input-select small-select" aria-label="Original highest note"></select></label>
+        <p class="more-hint">The key the recording actually sounds in, and its notes. For a song played half a step down, that's a half step below the chord shapes.</p>
+        <span class="more-inline">
+          <button type="button" class="solid-btn small-btn" id="save-original-btn">Save</button>
+          <button type="button" class="ghost-btn small-btn" id="cancel-original-btn">Cancel</button>
+        </span>
+      </div>
+      <p class="key-mismatch-hint" id="key-mismatch-hint" hidden></p>
 
       <button type="button" class="ghost-btn danger-text more-delete" id="delete-song-btn">Delete song</button>
     </div>
@@ -507,7 +522,7 @@
           <option value="desktop">Desktop</option>
         </select>
 
-        <p class="account-version">Chord Book <button type="button" class="link-btn version-link" id="app-version-pill" title="What’s new">v0.4.9</button> · <span id="device-mode-badge">Desktop</span></p>
+        <p class="account-version">Chord Book <button type="button" class="link-btn version-link" id="app-version-pill" title="What’s new">v0.7.1</button> · <span id="device-mode-badge">Desktop</span></p>
       </div>
     </div>
   </div>

@@ -2413,3 +2413,15 @@ body.no-cloud .needs-cloud { display: none !important; }
   .is-bad-fit-row .fit-song-badges { width: 100%; justify-content: space-between; }
   .is-bad-fit-row .small-btn { min-height: 44px; }
 }
+
+/* Original recording (More → Singing and tuning) and the key-vs-chords hint */
+.melody-original { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0 10px; border-bottom: 1px solid var(--line); }
+.melody-original-text { margin: 0; font-size: 0.88rem; }
+.melody-original-editor { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 8px 0 12px; border-bottom: 1px solid var(--line); }
+.melody-original-editor label { display: inline-flex; align-items: center; gap: 6px; font-size: 0.88rem; font-weight: 600; }
+.melody-original-editor .more-hint { width: 100%; border-bottom: none; padding-bottom: 0; }
+.key-mismatch-hint { margin: 8px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--indigo-soft); color: var(--indigo); font-size: 0.88rem; }
+.key-mismatch-hint .small-btn { margin-left: 6px; }
+@media (max-width: 640px) {
+  .melody-original-editor .small-select, .melody-original .small-btn, .key-mismatch-hint .small-btn { min-height: 44px; }
+}
