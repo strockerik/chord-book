@@ -826,14 +826,7 @@ function renderSmartAdvisorBanner(parsed, currentShapesKey, soundingKey) {
     // Rewrites the sheet itself in the new key (with Undo), like "Rewrite in this key".
     document.getElementById("apply-ideal-transpose-btn")?.addEventListener("click", async () => {
       closeSheet("song-more-modal");
-      viewState.semitoneDelta = rec.pureTranspose.semitoneShiftFromWritten;
-      viewState.capo = 0;
-      if (viewState.semitoneDelta === 0) {
-        viewState.isDirty = true;
-        refreshSongView();
-        return;
-      }
-      await bakeTransposedKeyIntoChordPro();
+      await applyVoiceKey(rec);
     });
   }
   if (rec?.easyCapo) {
@@ -972,7 +965,41 @@ export async function saveCurrentSettingsToSong({ silentMsg = null } = {}) {
 /**
  * Permanently transpose the stored ChordPro text to the currently displayed key ("Save in this key" + Undo).
  */
-async function bakeTransposedKeyIntoChordPro() {
+/**
+ * One tap from My Keys → Bad fit: open the song and rewrite it in the key the app suggests for
+ * your voice (with Undo).
+ */
+export async function rewriteInBetterKey(song) {
+  if (!song) return;
+  openSongView(song, { discardPending: true });
+  const allSongs = getLibrarySongsCallback ? getLibrarySongsCallback() : [activeSong];
+  const rec = getIdealVocalRangeRecommendations(songAsShown(), allSongs);
+  if (!rec?.pureTranspose || rec.isAlreadyIdeal) {
+    toast("This song already sits in a key that suits your voice.");
+    return;
+  }
+  await applyVoiceKey(rec);
+}
+
+// Rewrites the sheet in the suggested key, or (when only the capo has to go) saves no capo, with
+// Undo either way. A rating of how it felt in the old key no longer applies, so it's cleared.
+async function applyVoiceKey(rec) {
+  viewState.semitoneDelta = rec.pureTranspose.semitoneShiftFromWritten;
+  viewState.capo = 0;
+  if (viewState.semitoneDelta !== 0) {
+    await bakeTransposedKeyIntoChordPro({ clearRating: !!rec.felt });
+    return;
+  }
+  if (rec.felt) {
+    viewState.vocalRating = null;
+    viewState.vocalComfort = null;
+  }
+  await saveCurrentSettingsToSong({
+    silentMsg: `Now in ${rec.pureTranspose.targetShapesKey}, no capo${rec.felt ? ". Rate it again once you’ve sung it" : ""}`
+  });
+}
+
+async function bakeTransposedKeyIntoChordPro({ clearRating = false } = {}) {
   if (!activeSong || viewState.semitoneDelta === 0 || !onSaveSongCallback) return;
   clearTimeout(autosaveTimer);
   autosaveTimer = null;
@@ -987,8 +1014,16 @@ async function bakeTransposedKeyIntoChordPro() {
     key: newKey,
     chordpro: newChordPro,
     preferred_transpose: 0,
+    capo: viewState.capo,
     updated_at: new Date().toISOString()
   };
+  // How it felt to sing was about the old key; Undo brings it back.
+  if (clearRating) {
+    updated.vocal_rating = null;
+    updated.vocal_comfort = null;
+    viewState.vocalRating = null;
+    viewState.vocalComfort = null;
+  }
   // The melody moves with the sheet, so you still sing the same notes.
   const melodyNow = storedMelody(songAsShown());
   if (melodyNow) {
@@ -1004,7 +1039,7 @@ async function bakeTransposedKeyIntoChordPro() {
   await onSaveSongCallback(updated, { isUpdate: true });
   refreshSongView();
 
-  toastAction(`Rewrote in ${newKey}`, "Undo", async () => {
+  toastAction(`Rewrote in ${newKey}${clearRating ? ". Rate it again once you’ve sung it" : ""}`, "Undo", async () => {
     cancelAutosave();
     activeSong = previousSnapshot;
     await onSaveSongCallback(previousSnapshot, { isUpdate: true });

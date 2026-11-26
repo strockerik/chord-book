@@ -3,6 +3,11 @@
 // in js/core.js (testing-skills/melody_test.py checks it). Add a line here with every release.
 
 export const REVISIONS = [
+  { version: "0.6.5", date: "2026-11-25", notes: [
+    "My Keys → Bad fit: one tap rewrites a song in the key that suits your voice (or takes the capo off), with Undo.",
+    "Rewriting a song you rated hard clears that rating, since it was about the old key.",
+    "Imports write out a chorus in full when the source sings it with different words or chords."
+  ] },
   { version: "0.6.4", date: "2026-11-25", notes: [
     "Imports keep each chord on the right word when a line repeats a word (“…be, … be, … be”).",
     "A song you mark too high, too low, or 1–2★ always suggests a key, moving the way you said.",

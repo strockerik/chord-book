@@ -11,7 +11,7 @@ const fn = (name: string) => {
 };
 const code = slice("// ==== CHORD NET ====", "// ==== END CHORD NET ====") +
   slice("// ==== LAYOUT ====", "// ==== END LAYOUT ====") + fn("applyPlacementNotes") +
-  "\nexport { layoutFromSourceText, realignToLayout, applyPlacementNotes, isValidChordToken };\n";
+  "\nexport { layoutFromSourceText, realignToLayout, applyPlacementNotes, isValidChordToken, restoreChangedChoruses };\n";
 const tmp = Deno.makeTempFileSync({ suffix: ".ts" });
 Deno.writeTextFileSync(tmp, code);
 const m = await import("file://" + tmp);
@@ -58,6 +58,31 @@ m.realignToLayout(sections, layout, m.isValidChordToken);
 ok("A line with its ending repeated by the AI goes back to the source line",
    sections[0].lines[0].text === layout[1], sections[0].lines[0].text);
 ok("A stacked line goes back to the source layout", sections[0].lines[1].text === layout[0], sections[0].lines[1].text);
+
+// A chorus the AI marked "same again" whose words differ in the source comes back in full;
+// one that really is the same stays a repeat.
+const named = [
+  "[Verse 1]", "D            A", "Out along the river", "",
+  "[Chorus]", "G            D", "Carry me home tonight", "A               D", "Over the hill and far", "",
+  "[Verse 2]", "D            A", "Back along the river", "",
+  "[Chorus]", "G            D", "Carry me home tonight", "A                D", "Under the stars we are", "",
+  "[Chorus]", "G            D", "Carry me home tonight", "A               D", "Over the hill and far",
+].join("\n");
+const v2 = (t: string) => ({ text: t, tab: false });
+const sheet = [
+  { type: "verse", label: "Verse 1", lines: [v2("[D]Out along the [A]river")] },
+  { type: "chorus", label: "Chorus", lines: [v2("[G]Carry me home to[D]night"), v2("[A]Over the hill and [D]far")] },
+  { type: "verse", label: "Verse 2", lines: [v2("[D]Back along the [A]river")] },
+  { type: "chorus_repeat", label: "Chorus", lines: [] },
+  { type: "chorus_repeat", label: "Chorus", lines: [] },
+];
+const back = m.restoreChangedChoruses(sheet, named, m.isValidChordToken);
+ok("A repeat whose words differ in the source is written out from the source",
+   back === 1 && sheet[3].type === "chorus" && sheet[3].lines.map((l: { text: string }) => l.text).join(" / ").includes("Under the stars"),
+   JSON.stringify(sheet[3]));
+ok("A repeat that matches the source stays a repeat", sheet[4].type === "chorus_repeat", sheet[4].type);
+const unnamed = [{ type: "chorus", label: "Chorus", lines: [v2("[G]Carry me home to[D]night")] }, { type: "chorus_repeat", label: "Chorus", lines: [] }];
+ok("Without section names in the source nothing changes", m.restoreChangedChoruses(unnamed, named.replace(/\[[^\]]+\]/g, ""), m.isValidChordToken) === 0);
 
 Deno.removeSync(tmp);
 for (const r of results) console.log(`[${r.pass ? "PASS" : "FAIL"}] ${r.name}` + (r.pass ? "" : ` — ${r.detail}`));

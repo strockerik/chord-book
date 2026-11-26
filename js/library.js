@@ -36,7 +36,7 @@ import {
   getDeviceProfile,
   setDeviceOverride
 } from "./device.js";
-import { initSongController, openSongView, openSongEditor, getActiveSong, showEmptySongStage, applyMelodyToOpenSong } from "./song.js";
+import { initSongController, openSongView, openSongEditor, getActiveSong, showEmptySongStage, applyMelodyToOpenSong, rewriteInBetterKey } from "./song.js";
 import { initImportModal, lookUpMelodyRanges } from "./ai.js";
 import { REVISIONS } from "./revisions.js";
 import { melodyFromRecording, storedMelody, songsMissingMelody, getVocalRange, setManualVocalRange } from "./melody.js";
@@ -748,6 +748,15 @@ async function bootApp() {
             e.preventDefault();
             open();
           }
+        });
+      });
+      body.querySelectorAll("[data-rewrite-song]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const s = songs.find((x) => x.id === btn.getAttribute("data-rewrite-song"));
+          if (!s) return;
+          closeSheet("analytics-modal");
+          await rewriteInBetterKey(s);
+          renderLibrarySidebar();
         });
       });
       const lowPick = body.querySelector("#vocal-range-low");

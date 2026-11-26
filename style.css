@@ -2403,3 +2403,13 @@ body.no-cloud .needs-cloud { display: none !important; }
   content: ""; position: absolute; top: 5px; right: 5px; width: 8px; height: 8px;
   border-radius: 50%; background: var(--accent);
 }
+
+/* Bad fit rows: open the song, or rewrite it in the suggested key in one tap */
+.is-bad-fit-row { cursor: default; }
+.is-bad-fit-row .fit-song-main { cursor: pointer; flex: 1; min-width: 0; }
+.is-bad-fit-row .small-btn { white-space: nowrap; }
+@media (max-width: 640px) {
+  .is-bad-fit-row { flex-wrap: wrap; }
+  .is-bad-fit-row .fit-song-badges { width: 100%; justify-content: space-between; }
+  .is-bad-fit-row .small-btn { min-height: 44px; }
+}

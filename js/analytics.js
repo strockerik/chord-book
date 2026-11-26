@@ -519,7 +519,13 @@ export function renderAnalyticsDashboardHTML(songs = []) {
       const step = comfort === "too_low" ? 2 : -2;
       fix = `Try ${transposeKey(keys.shapesKey, step)} (${step > 0 ? "up" : "down"} a whole step)`;
     }
-    return { song, sings, why, fix, ratedHard };
+    // Already written in that key with a capo on: the fix is taking the capo off.
+    const capoOnly = rec?.pureTranspose && rec.pureTranspose.semitoneShiftFromWritten === 0 && Number(song.preferred_transpose || 0) === 0;
+    if (capoOnly && rec.pureTranspose) fix = fix.replace(`Rewrite in ${rec.pureTranspose.targetShapesKey}`, `Take the capo off (${rec.pureTranspose.targetShapesKey})`);
+    const target = rec?.pureTranspose && !rec.isAlreadyIdeal
+      ? (capoOnly ? "No capo" : `Rewrite in ${rec.pureTranspose.targetShapesKey}`)
+      : null;
+    return { song, sings, why, fix, ratedHard, target };
   }).filter(Boolean).sort((a, b) => (b.ratedHard - a.ratedHard) || a.song.title.localeCompare(b.song.title));
   const missingMelody = songsMissingMelody(songs).length;
   const withMelody = songs.filter((x) => sungRange(x)).length;
@@ -624,16 +630,17 @@ export function renderAnalyticsDashboardHTML(songs = []) {
       <section class="analytics-panel">
         <h4 class="analytics-panel-title">Bad fit${badFits.length ? ` (${badFits.length})` : ""}</h4>
         ${badFits.length ? `
-          <p class="analytics-panel-desc">Songs you rated hard to sing, songs whose melody runs past your range, and songs without a range two or more half steps from your best keys. Tap one to open it and apply the fix.</p>
+          <p class="analytics-panel-desc">Songs you rated hard to sing, songs whose melody runs past your range, and songs without a range two or more half steps from your best keys. Tap the button to change the song to that key (you can undo it), or tap a title to open it.</p>
           <div class="best-fit-songs-list">
-            ${badFits.map(({ song, sings, why, fix }) => `
-              <div class="fit-song-row" data-open-song="${esc(song.id)}" role="button" tabindex="0">
-                <div class="fit-song-main">
+            ${badFits.map(({ song, sings, why, fix, target }) => `
+              <div class="fit-song-row is-bad-fit-row">
+                <div class="fit-song-main" data-open-song="${esc(song.id)}" role="button" tabindex="0" title="Open ${esc(song.title)}">
                   <strong class="fit-song-title">${esc(song.title)}</strong>
                   <span class="fit-song-sub">${esc(sings)} • ${esc(fix)}</span>
                 </div>
                 <div class="fit-song-badges">
                   <span class="fit-badge is-bad-fit">${esc(why)}</span>
+                  ${target ? `<button type="button" class="solid-btn small-btn" data-rewrite-song="${esc(song.id)}">${esc(target)}</button>` : ""}
                 </div>
               </div>
             `).join("")}

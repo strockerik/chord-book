@@ -528,15 +528,24 @@ function chordColumns(line: string, isValid: (c: string) => boolean): Array<{ ch
   return out.length ? out : null;
 }
 
-/** Lyric lines with chords placed by column from a monospaced, chords-over-lyrics transcription. */
-function layoutFromSourceText(text: string, isValid: (c: string) => boolean): string[] {
+/**
+ * Lyric lines with chords placed by column from a monospaced, chords-over-lyrics transcription.
+ * With keepAll, lines without chords and chord-only lines are kept too, in order.
+ */
+function layoutFromSourceText(text: string, isValid: (c: string) => boolean, keepAll = false): string[] {
   const lines = String(text || "").replace(/\r/g, "").replace(/\t/g, "    ").split("\n");
   const out: string[] = [];
-  for (let i = 0; i < lines.length - 1; i++) {
+  for (let i = 0; i < lines.length; i++) {
     const chords = chordColumns(lines[i], isValid);
-    if (!chords) continue;
-    const lyric = lines[i + 1];
-    if (!/[a-z]/i.test(lyric) || chordColumns(lyric, isValid)) continue;
+    if (!chords) {
+      if (keepAll && /[a-z]/i.test(lines[i]) && !SOURCE_HEADER.test(lines[i])) out.push(lines[i].trim().replace(/\s+/g, " "));
+      continue;
+    }
+    const lyric = lines[i + 1] ?? "";
+    if (!/[a-z]/i.test(lyric) || chordColumns(lyric, isValid)) {
+      if (keepAll) out.push(chords.map((c) => `[${c.chord}]`).join("   "));
+      continue;
+    }
     const start = lyric.search(/\S/);
     const slots = new Map<number, string[]>();
     // Chords over the space before the first word are played before it; the last one lands on it.
@@ -559,6 +568,49 @@ function layoutFromSourceText(text: string, isValid: (c: string) => boolean): st
     i++;
   }
   return out;
+}
+
+// A section name on its own line in a chord site's text: "[Chorus]", "[Verse 2]".
+const SOURCE_HEADER = /^\s*\[([^\]]+)\]\s*$/;
+
+/**
+ * The AI sometimes marks a chorus as "the same again" when the source sings it with other words
+ * or chords (a second chorus with a different line, a longer last chorus). When the source names
+ * its sections, compare each repeat with the source's chorus at that spot and write out the ones
+ * that differ, straight from the source. Returns how many came back.
+ */
+// deno-lint-ignore no-explicit-any
+function restoreChangedChoruses(sections: any[], sourceText: string, isValid: (c: string) => boolean): number {
+  const blocks: Array<{ label: string; text: string[] }> = [];
+  let cur: { label: string; text: string[] } | null = null;
+  for (const raw of String(sourceText || "").replace(/\r/g, "").split("\n")) {
+    const h = raw.match(SOURCE_HEADER);
+    if (h && !isValid(h[1].trim())) { cur = { label: h[1].trim(), text: [] }; blocks.push(cur); continue; }
+    if (cur) cur.text.push(raw);
+  }
+  const isChorus = (label: string) => /chorus|refrain/i.test(label) && !/pre|post/i.test(label);
+  const fromSource = blocks.filter((b) => isChorus(b.label)).map((b) => layoutFromSourceText(b.text.join("\n"), isValid, true));
+  // deno-lint-ignore no-explicit-any
+  const inSheet = (sections || []).filter((s: any) => (s.type === "chorus" || s.type === "chorus_repeat") && !/pre|post/i.test(s.label || ""));
+  if (fromSource.length < 2 || fromSource.length !== inSheet.length || inSheet[0].type !== "chorus") return 0;
+  const first = inSheet[0];
+  // deno-lint-ignore no-explicit-any
+  const firstLines: string[] = (first.lines || []).filter((l: any) => !l.tab && typeof l.text === "string").map((l: any) => l.text);
+  const words = (lines: string[]) => lines.map(wordsKey).filter(Boolean).join("|");
+  const chords = (lines: string[]) => lines.flatMap(chordList).join(" ");
+  // Only when the source's first chorus reads like the sheet's: proof the two line up.
+  if (words(fromSource[0]) !== words(firstLines)) return 0;
+  let restored = 0;
+  inSheet.forEach((sec, i) => {
+    const src = fromSource[i];
+    if (i === 0 || sec.type !== "chorus_repeat" || !src.length) return;
+    if (words(src) === words(firstLines) && chords(src) === chords(firstLines)) return;
+    sec.type = "chorus";
+    sec.label = sec.label && !/repeat/i.test(sec.label) ? sec.label : (first.label || "Chorus");
+    sec.lines = src.map((text) => ({ text, tab: false }));
+    restored++;
+  });
+  return restored;
 }
 
 /** Text pastes keep exact columns; this only moves chords that land inside a word to a syllable start. */
@@ -1148,6 +1200,8 @@ Deno.serve(async (req: Request) => {
   let layout: string[] = [];
   // Set below for photos and links.
   let withSource = false;
+  // The source as text, when there is one, to check repeated choruses against.
+  let sourceText = "";
 
   if (reqType === "text") {
     if (Array.isArray(body?.layout)) {
@@ -1157,6 +1211,7 @@ Deno.serve(async (req: Request) => {
         .map((l: string) => snapLayoutLine(l));
     }
     const text = typeof body?.text === "string" ? body.text.trim() : "";
+    sourceText = text;
     if (!text || text.length < 10) return json({ error: "Paste a chord sheet first." });
     if (text.length > 40_000) return json({ error: "Pasted text is too long (max 40,000 characters)." });
     userContent.push({
@@ -1232,6 +1287,7 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Couldn’t load that page — copy the chords and paste them instead." });
     }
     const pageText = pageTextForImport(pageHtml);
+    sourceText = pageText;
     if (pageText.length < 200) {
       return json({ error: "That page builds itself in the browser, so it can’t be read from a link. Copy the song and paste it instead." });
     }
@@ -1334,6 +1390,8 @@ Deno.serve(async (req: Request) => {
         ? layoutFromSourceText(sheet.source_text, isValidChordToken)
         : []);
     if (exact.length) realignToLayout(sheet.sections, exact, isValidChordToken);
+    const source = sourceText || (sheet.monospaced === true && typeof sheet.source_text === "string" ? sheet.source_text : "");
+    if (source) restoreChangedChoruses(sheet.sections, source, isValidChordToken);
     collapseWrittenRepeats(sheet.sections);
     delete sheet.source_text;
     delete sheet.monospaced;
