@@ -508,8 +508,19 @@
           <option value="desktop">Desktop</option>
         </select>
 
-        <p class="account-version">Chord Book <span id="app-version-pill">v0.4.9</span> · <span id="device-mode-badge">Desktop</span></p>
+        <p class="account-version">Chord Book <button type="button" class="link-btn version-link" id="app-version-pill" title="What’s new">v0.4.9</button> · <span id="device-mode-badge">Desktop</span></p>
       </div>
+    </div>
+  </div>
+
+  <!-- What's new: every release in plain words (js/revisions.js) -->
+  <div id="whats-new-modal" class="modal-sheet no-print" role="dialog" aria-modal="true" aria-labelledby="whats-new-title" hidden>
+    <div class="sheet-panel">
+      <div class="sheet-panel-header">
+        <h3 id="whats-new-title" class="sheet-panel-title">What’s new</h3>
+        <button type="button" class="sheet-close-btn" data-close-sheet="whats-new-modal" aria-label="Close">×</button>
+      </div>
+      <div id="whats-new-body" class="sheet-body-scroll"></div>
     </div>
   </div>
 

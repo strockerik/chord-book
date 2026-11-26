@@ -21,6 +21,8 @@ CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 TEST_JS = r"""
 import * as m from "./js/melody.js";
 import * as a from "./js/analytics.js";
+import { APP_VERSION } from "./js/core.js";
+import { REVISIONS } from "./js/revisions.js";
 const results = [];
 const ok = (name, cond, detail = "") => results.push({ name, pass: !!cond, detail: String(detail) });
 try { localStorage.clear(); } catch {}
@@ -82,6 +84,8 @@ ok("My Keys shows your range", page.includes("Your vocal range") && page.include
 ok("Bad fit lists the too-high song with the notes it would sing",
    /Bad fit \(1\)/.test(page) && /Sings D3–A#4 • Rewrite in A to sing B2–G4/.test(page), page.match(/fit-song-sub">[^<]*/g));
 ok("My Keys offers to look up the missing melody", page.includes("Look up 1 melody range with AI"));
+ok("What's new lists this release first", REVISIONS[0]?.version === APP_VERSION && REVISIONS[0].notes.length > 0,
+   `${REVISIONS[0]?.version} vs ${APP_VERSION}`);
 document.getElementById("out").textContent = JSON.stringify(results);
 """
 

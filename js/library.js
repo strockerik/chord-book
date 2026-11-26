@@ -38,6 +38,7 @@ import {
 } from "./device.js";
 import { initSongController, openSongView, openSongEditor, getActiveSong, showEmptySongStage, applyMelodyToOpenSong } from "./song.js";
 import { initImportModal, lookUpMelodyRanges } from "./ai.js";
+import { REVISIONS } from "./revisions.js";
 import { melodyFromRecording, storedMelody, songsMissingMelody, getVocalRange, setManualVocalRange } from "./melody.js";
 import { initPerformanceControls } from "./perform.js";
 import { loadSetlists, renderSetlistsSheetHTML, getSetlistItems } from "./setlists.js";
@@ -112,6 +113,18 @@ export async function saveSong(songObj, { isUpdate = false } = {}) {
   } catch {
     queueOfflineWrite({ type: isUpdate ? "update_song" : "insert_song", row: songObj });
   }
+}
+
+function openWhatsNew() {
+  const body = document.getElementById("whats-new-body");
+  if (!body) return;
+  const day = (iso) => new Date(iso + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  body.innerHTML = `<ol class="revision-list">${REVISIONS.map((r) => `
+    <li class="revision-item">
+      <div class="revision-head"><strong>v${esc(r.version)}</strong><span class="revision-date">${esc(day(r.date))}</span>${r.version === APP_VERSION ? `<span class="revision-current">You have this</span>` : ""}</div>
+      <ul>${r.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>
+    </li>`).join("")}</ol>`;
+  openSheet("whats-new-modal");
 }
 
 // A new song's melody range is looked up a moment after it is added, in one call for a whole
@@ -563,7 +576,19 @@ async function bootApp() {
   // The boot guard (js/boot-guard.js) offers a fresh reload if this never runs.
   window.__cbBooted = true;
   const verEl = document.getElementById("app-version-pill");
-  if (verEl) verEl.textContent = `v${APP_VERSION}`;
+  if (verEl) {
+    verEl.textContent = `v${APP_VERSION}`;
+    verEl.addEventListener("click", () => {
+      closeSheet("account-modal");
+      openWhatsNew();
+    });
+  }
+  // After an update, say so once and offer the list of changes.
+  const seenVersion = loadLocal("seen_version", null);
+  if (seenVersion !== APP_VERSION) {
+    saveLocal("seen_version", APP_VERSION);
+    if (seenVersion) setTimeout(() => toastAction(`Updated to v${APP_VERSION}`, "What’s new", openWhatsNew), 1500);
+  }
 
   setupGlobalEscapeAndBackdrop();
   initPerformanceControls();

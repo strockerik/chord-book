@@ -3,7 +3,7 @@
 // - Per-user Supabase REST cache that never caches anonymous reads and wipes on user switch/sign-out
 // - Pre-caches self-hosted fonts and ES modules so the app works offline at a gig
 
-const VERSION = "cb-v0.6.1";
+const VERSION = "cb-v0.6.2";
 const SHELL_CACHE = `${VERSION}-shell`;
 const DATA_CACHE = `${VERSION}-data`;
 const META_KEY = "https://chordbook.local/__meta/owner";
@@ -25,6 +25,7 @@ const SHELL_FILES = [
   "js/render.js",
   "js/fit.js",
   "js/melody.js",
+  "js/revisions.js",
   "js/analytics.js",
   "js/ai.js",
   "js/send.js",

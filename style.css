@@ -2386,3 +2386,13 @@ body.no-cloud .needs-cloud { display: none !important; }
 @media (max-width: 640px) {
   .melody-pickers .small-select, .vocal-range-pickers .small-select { min-height: 44px; }
 }
+
+/* What's new */
+.version-link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
+.revision-list { list-style: none; margin: 0; padding: 0; }
+.revision-item { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.revision-item:last-child { border-bottom: none; }
+.revision-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.revision-date { color: var(--faint); font-size: 0.82rem; }
+.revision-current { font-size: 0.75rem; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
+.revision-item ul { margin: 0; padding-left: 18px; font-size: 0.92rem; line-height: 1.45; }
