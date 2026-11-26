@@ -21,3 +21,6 @@ __*driver.html
 
 # Owner test material (real lyrics) — never commit
 House Index Test/
+
+# Owner's running list of import and layout failures (names songs and test accounts)
+Known Failures.md
