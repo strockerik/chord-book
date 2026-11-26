@@ -463,6 +463,22 @@ function realignToLayout(
         out.push({ ...line, text: exact });
         continue;
       }
+      // The AI repeated the end of a line ("... let it be, let it be"): the source line wins.
+      const stutter = ordered.find((o) => {
+        if (!key.startsWith(o.key + " ")) return false;
+        const extra = key.slice(o.key.length + 1).split(" ");
+        const words = o.key.split(" ");
+        for (let n = 1; n <= Math.min(4, words.length); n++) {
+          const tail = words.slice(-n);
+          if (extra.length % n === 0 && extra.every((w, j) => w === tail[j % n])) return true;
+        }
+        return false;
+      });
+      if (stutter && sameRoots(chordList(stutter.text), chordList(line.text))) {
+        out.push({ ...line, text: stutter.text });
+        changed++;
+        continue;
+      }
       // The AI joined two or three source lines into one: put the source lines back.
       let joined: string[] | null = null;
       for (let a = 0; a < ordered.length && !joined; a++) {
@@ -586,18 +602,39 @@ function applyPlacementNotes(sections: any[]): number {
       const lyric = line.text.replace(/\[[^\]]*\]/g, "");
       if (!lyric.trim()) continue;
       const lower = lyric.toLowerCase();
+      const clean = (a: string) => a.toLowerCase().replace(/[.,!?;:]+$/, "");
+      // Where the AI put each chord in the line it wrote.
+      const written: number[] = [];
+      let plain = 0;
+      for (const piece of line.text.split(/(\[[^\]]+\])/)) {
+        if (/^\[[^\]]+\]$/.test(piece)) written.push(plain);
+        else plain += piece.length;
+      }
+      const onWord = (a: string, at: number) => lower.startsWith(a, at) || lower.startsWith(a, at + 1);
+      // The line already puts every chord on its word: keep it. Rebuilding it could only lose
+      // which of several same words ("be, … be, … be") each chord is on.
+      if (notes.every((n, k) => (n.anchor ? onWord(clean(n.anchor), written[k]) : written[k] >= lyric.trimEnd().length))) continue;
+      const find = (a: string, from: number) => {
+        // Prefer the anchor at the start of a word, then anywhere inside one.
+        let at = -1;
+        for (let i = lower.indexOf(a, from); i >= 0; i = lower.indexOf(a, i + 1)) {
+          if (i === 0 || !/[a-z']/i.test(lower[i - 1])) return i;
+          if (at < 0) at = i;
+        }
+        return at;
+      };
       const spots: number[] = [];
       let cursor = 0;
       let ok = true;
-      for (const n of notes) {
+      for (let k = 0; k < notes.length; k++) {
+        const n = notes[k];
         if (!n.anchor) { spots.push(lyric.length); continue; }
-        const a = n.anchor.toLowerCase().replace(/[.,!?;:]+$/, "");
-        // Prefer the anchor at the start of a word, then anywhere inside one.
-        let at = -1;
-        for (let i = lower.indexOf(a, cursor); i >= 0; i = lower.indexOf(a, i + 1)) {
-          if (i === 0 || !/[a-z']/i.test(lower[i - 1])) { at = i; break; }
-          if (at < 0) at = i;
-        }
+        const a = clean(n.anchor);
+        // The same word named again ("Am over be, G over be") is its next appearance when there
+        // is one; several quick chords on a word that appears once stay together.
+        const prev = k > 0 && notes[k - 1].anchor ? clean(notes[k - 1].anchor as string) : null;
+        let at = prev === a ? find(a, cursor + 1) : -1;
+        if (at < 0) at = find(a, cursor);
         if (at < 0) { ok = false; break; }
         spots.push(at);
         cursor = at;
@@ -1372,7 +1409,9 @@ Deno.serve(async (req: Request) => {
         if (r.status === "fulfilled" && r.value.problems.length === 0) results.push(resultFor(r.value.sheet));
       }
     }
-    return json({ result: results[0], results, missed: others.length + 1 - results.length });
+    // How the chords were placed, for the live import test: "layout" = the source's own columns.
+    const placedBy = layout.length ? "layout" : withSource ? "ai-copy" : "ai";
+    return json({ result: results[0], results, missed: others.length + 1 - results.length, placed_by: placedBy, layout_lines: layout.length });
   } catch (err) {
     console.error("import-sheet error:", err);
     const msg = err instanceof Error ? err.message : "";

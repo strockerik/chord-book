@@ -3,6 +3,11 @@
 // in js/core.js (testing-skills/melody_test.py checks it). Add a line here with every release.
 
 export const REVISIONS = [
+  { version: "0.6.4", date: "2026-11-25", notes: [
+    "Imports keep each chord on the right word when a line repeats a word (“…be, … be, … be”).",
+    "A song you mark too high, too low, or 1–2★ always suggests a key, moving the way you said.",
+    "A dot on More means a better key for your voice is waiting there."
+  ] },
   { version: "0.6.3", date: "2026-11-25", notes: [
     "A House Index account is now required; “Use without signing in” is gone.",
     "With no signal at a gig, the person last signed in on the device still opens their saved songs."

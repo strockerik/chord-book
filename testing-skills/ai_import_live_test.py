@@ -66,6 +66,8 @@ CASES = [
     ("text-jm-gravity", "John Mayer Chords copy, mostly guitar tab", "text", "Other Sources/Gravity - John Mayer Chords copy.txt", []),
     ("text-davetabs-crash", "DaveTabs copy, tab only with no chords or lyrics", "text", "Other Sources/Crash Into Me - DaveTabs copy.txt", []),
     ("link-ug-so-last-summer", "Link: the Ultimate Guitar page the screen grabs came from", "url", "https://tabs.ultimate-guitar.com/tab/taking-back-sunday/youre-so-last-summer-chords-668210", []),
+    # Many identical "Let it be" lines in the chorus, each with its own chords.
+    ("link-ug-let-it-be", "Link: Ultimate Guitar page with a chorus of repeated short lines", "url", "https://tabs.ultimate-guitar.com/tab/the-beatles/let-it-be-chords-17427", []),
     ("link-hymnal-amazing-grace", "Link: hymnal.net page with chords", "url", "https://www.hymnal.net/en/hymn/h/313", []),
     ("link-jm-split-screen", "Link: John Mayer Chords page", "url", "https://johnmayerchords.com/albums/Heavier%20Things/Split%20Screen%20Sadness/Studio", []),
 ]
@@ -279,7 +281,9 @@ def report(outcomes, run_dir):
         data = o["data"] if isinstance(o["data"], dict) else {}
         results = data.get("results") or ([data["result"]] if data.get("result") else [])
         o["results"] = results
-        head = f"## {o['id']}: {o['what']}\n{o['input']} · {o['seconds']}s · HTTP {o['http']}"
+        d = o["data"] if isinstance(o.get("data"), dict) else {}
+        placed = f" · chords placed by {d['placed_by']} ({d.get('layout_lines', 0)} source lines)" if d.get("placed_by") else ""
+        head = f"## {o['id']}: {o['what']}\n{o['input']} · {o['seconds']}s · HTTP {o['http']}{placed}"
         if data.get("error") or not results:
             lines += [head, f"**FAILED:** {data.get('error') or o['data']}", ""]
             continue

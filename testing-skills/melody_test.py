@@ -74,6 +74,18 @@ ok("A too-high song gets a rewrite that brings every note inside",
    JSON.stringify({ range: rec.range, pt: rec.pureTranspose }));
 ok("A song whose notes fit counts as a good fit in any key", a.getIdealVocalRangeRecommendations(lib[0], lib).isAlreadyIdeal === true);
 
+// How it feels beats the estimate: a song marked too high moves down even when its notes "fit".
+const feltHigh = { ...lib[0], id: "5", vocal_comfort: "high_stretch" };
+const recHigh = a.getIdealVocalRangeRecommendations(feltHigh, [...lib, feltHigh]);
+ok("A song you marked too high always gets a lower key", !recHigh.isAlreadyIdeal && recHigh.felt
+   && recHigh.pureTranspose?.semitoneShiftFromCurrent < 0, JSON.stringify({ felt: recHigh.felt, pt: recHigh.pureTranspose }));
+const feltLow = { id: "6", title: "Low", key: "E", chordpro: sheet("E"), vocal_comfort: "too_low", layout_prefs: {} };
+const recLow = a.getIdealVocalRangeRecommendations(feltLow, [...lib, feltLow]);
+ok("A song you marked too low always gets a higher key", recLow.felt && recLow.pureTranspose?.semitoneShiftFromCurrent > 0,
+   JSON.stringify(recLow.pureTranspose));
+const feltOne = { id: "7", title: "One star", key: "A", chordpro: sheet("A"), vocal_rating: 1, layout_prefs: {} };
+ok("A 1★ song gets a key to try", !!a.getIdealVocalRangeRecommendations(feltOne, [...lib, feltOne]).pureTranspose);
+
 m.setManualVocalRange({ low: 43, high: 72 });
 ok("A range you set wins over the songs", m.getVocalRange(lib).from === "you" && m.getVocalRange(lib).high === 72);
 ok("With your wider range the high song fits", a.getIdealVocalRangeRecommendations(lib[2], lib).range.fits === true);

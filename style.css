@@ -2396,3 +2396,10 @@ body.no-cloud .needs-cloud { display: none !important; }
 .revision-date { color: var(--faint); font-size: 0.82rem; }
 .revision-current { font-size: 0.75rem; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
 .revision-item ul { margin: 0; padding-left: 18px; font-size: 0.92rem; line-height: 1.45; }
+
+/* A better key for your voice is waiting under More */
+#toggle-more-controls-btn.has-tip { position: relative; }
+#toggle-more-controls-btn.has-tip::after {
+  content: ""; position: absolute; top: 5px; right: 5px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--accent);
+}

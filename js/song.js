@@ -792,7 +792,10 @@ function renderSmartAdvisorBanner(parsed, currentShapesKey, soundingKey) {
         `<button type="button" class="advisor-apply-btn is-secondary" id="apply-ideal-capo-btn">${esc(capoOpt.label)}</button>`
       );
     }
-    const why = rec.range
+    const move = (n) => `${Math.abs(n)} half step${Math.abs(n) === 1 ? "" : "s"} ${n < 0 ? "down" : "up"}`;
+    const why = rec.felt
+      ? `you marked this ${esc(rec.felt.label)}. ${esc(pt.targetShapesKey)} is ${esc(move(pt.semitoneShiftFromCurrent))}${rec.range?.after ? `, where you’d sing ${esc(rangeText(rec.range.after))}` : ""}.`
+      : rec.range
       ? `the melody runs ${esc(rangeText(rec.range.sung))} here and your range is ${esc(rangeText(rec.range.voice))}.${rec.range.after ? ` In ${esc(pt.targetShapesKey)} you’d sing ${esc(rangeText(rec.range.after))}.` : ""}`
       : `this sounds in ${esc(soundingKey)}. Your sweet-spot keys are ${esc(rec.idealLabels.join(", "))}.`;
     tips.push(`<span><strong>Better for your voice:</strong> ${why} ${btns.join(" ")}</span>`);
@@ -805,6 +808,13 @@ function renderSmartAdvisorBanner(parsed, currentShapesKey, soundingKey) {
     );
   }
 
+  // A better key for your voice waits under More: a dot on the button says so.
+  const moreBtn = document.getElementById("toggle-more-controls-btn");
+  if (moreBtn) {
+    const hasVoiceTip = !!(rec && !rec.isAlreadyIdeal && rec.pureTranspose);
+    moreBtn.classList.toggle("has-tip", hasVoiceTip);
+    moreBtn.setAttribute("aria-label", hasVoiceTip ? "More (a better key for your voice)" : "More");
+  }
   if (!tips.length) {
     banner.hidden = true;
     return;

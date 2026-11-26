@@ -405,6 +405,39 @@ export function getIdealVocalRangeRecommendations(songDraftOrRow, librarySongs =
     }
   }
 
+  // How a song feels to sing beats any estimate: one you marked too high, too low, or 1–2★
+  // always gets a key to try, moving the way you said (down when it's too high).
+  let felt = null;
+  const comfort = songDraftOrRow?.vocal_comfort || "";
+  const rating = Number(songDraftOrRow?.vocal_rating || 0);
+  if (comfort === "high_stretch" || comfort === "too_low" || (rating > 0 && rating <= 2)) {
+    let dir = comfort === "high_stretch" ? -1 : comfort === "too_low" ? 1 : 0;
+    if (!dir && range) dir = (range.sung.low + range.sung.high) / 2 > (range.voice.low + range.voice.high) / 2 ? -1 : 1;
+    const planned = !alreadyIdeal && pureTranspose ? pureTranspose.semitoneShiftFromCurrent : 0;
+    if (!planned || (dir && Math.sign(planned) !== dir)) {
+      if (!dir) dir = -1; // no other clue: lower is the usual relief
+      // The nearest of your best keys that way, up to 5 half steps; otherwise a whole step.
+      let shift = 0;
+      for (let k = 1; k <= 5 && !shift; k++) {
+        const pitch = getKeyCenter(transposeKey(currentSoundingKey, dir * k)).pitch;
+        if (idealCenters.some((c) => c.pitch === pitch)) shift = dir * k;
+      }
+      if (!shift) shift = 2 * dir;
+      const option = optionFor(transposeKey(currentSoundingKey, shift), 0, "");
+      pureTranspose = { ...option.pureOption, label: `Rewrite in ${option.pureOption.targetShapesKey}` };
+      easyCapo = option.capoOption;
+      if (range) {
+        range.wide = false;
+        range.after = rangeFit({ low: range.sung.low + shift, high: range.sung.high + shift }, range.voice);
+      }
+    }
+    alreadyIdeal = false;
+    felt = {
+      direction: Math.sign(pureTranspose?.semitoneShiftFromCurrent || dir || -1),
+      label: comfort === "high_stretch" ? "too high" : comfort === "too_low" ? "too low" : `${rating}★`
+    };
+  }
+
   return {
     writtenKey,
     currentShapesKey,
@@ -416,7 +449,8 @@ export function getIdealVocalRangeRecommendations(songDraftOrRow, librarySongs =
     pureTranspose,
     easyCapo,
     allOptions,
-    range
+    range,
+    felt
   };
 }
 
@@ -471,7 +505,11 @@ export function renderAnalyticsDashboardHTML(songs = []) {
     if (!ratedHard && range) why = range.sung.over ? "Too high" : "Too low";
     const sings = range ? `Sings ${rangeText(range.sung)}` : `Sounds in ${keys.soundingKey}`;
     let fix;
-    if (range && range.wide) {
+    if (rec?.pureTranspose && (outside || rec.felt)) {
+      fix = `Rewrite in ${rec.pureTranspose.targetShapesKey}` +
+        (range?.after ? ` to sing ${rangeText(range.after)}` : "") +
+        (rec.easyCapo ? `, or ${rec.easyCapo.label}` : "");
+    } else if (range && range.wide) {
       fix = `in any key the melody is wider than your ${rangeText(range.voice)} range`;
     } else if (outside && rec.pureTranspose) {
       fix = `Rewrite in ${rec.pureTranspose.targetShapesKey}` +
