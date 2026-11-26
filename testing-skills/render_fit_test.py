@@ -70,8 +70,6 @@ __FIXTURE_BOOT__
   for (let i = 0; i < 250; i++) {
     win = frame.contentWindow;
     doc = frame.contentDocument;
-    const gate = doc?.getElementById("auth-gate");
-    if (gate && !gate.hidden) doc.getElementById("auth-continue-local-btn").click();
     if (doc && doc.querySelector(".sheet-page .cl-pair")) break;
     await sleep(60);
   }

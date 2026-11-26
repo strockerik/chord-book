@@ -1,6 +1,6 @@
 // Main Application Entry & Song Library Controller (js/library.js)
 // Coordinates:
-// - Auth Gate (Supabase sign-in with House Index credentials + Local Demo fallback)
+// - Auth Gate (House Index account required; see initAuthAndLoadData)
 // - Song Library list, search (title/artist/tags/lyrics), sort, tag & vocal-key filters
 // - Song View, Import Modal, Vocal Key Analytics Modal, Set Lists Modal, and Guide Modal
 // - Full delete + Undo (restoring song, shares, and set-list entries)
@@ -873,6 +873,27 @@ async function bootApp() {
   await initAuthAndLoadData();
 }
 
+const LAST_USER_KEY = "cb:last_user";
+function rememberLastUser(user) {
+  try {
+    if (user?.id) localStorage.setItem(LAST_USER_KEY, JSON.stringify({ id: user.id, email: user.email || "" }));
+  } catch { /* storage off */ }
+}
+function recallLastUser() {
+  try {
+    const u = JSON.parse(localStorage.getItem(LAST_USER_KEY) || "null");
+    return u?.id ? u : null;
+  } catch {
+    return null;
+  }
+}
+function forgetLastUser() {
+  try { localStorage.removeItem(LAST_USER_KEY); } catch { /* storage off */ }
+}
+function isLocalDevServer() {
+  return ["127.0.0.1", "localhost"].includes(location.hostname);
+}
+
 async function initAuthAndLoadData() {
   const sb = getSupabase();
   const authGate = document.getElementById("auth-gate");
@@ -975,16 +996,10 @@ async function initAuthAndLoadData() {
         }
         return;
       }
+      rememberLastUser(data?.user);
       await enterAppAs(data?.user);
     });
   }
-
-  // "Continue in Local / Offline Mode" button on Auth Gate so user can test immediately or use offline
-  document.getElementById("auth-continue-local-btn")?.addEventListener("click", async () => {
-    setCurrentUserId("local");
-    saveLocal("use_local_book", true);
-    await enterAppAs({ id: "local" });
-  });
 
   // Sign Out button in Account modal
   document.getElementById("account-signout-btn")?.addEventListener("click", async () => {
@@ -995,29 +1010,40 @@ async function initAuthAndLoadData() {
       navigator.serviceWorker.controller.postMessage({ type: "WIPE_USER_CACHE" });
     }
     closeSheet("account-modal");
+    forgetLastUser();
     setCurrentUserId("local");
-    saveLocal("use_local_book", false);
     document.body.classList.add("no-cloud");
     if (authGate) authGate.hidden = false;
     if (appShell) appShell.hidden = true;
   });
 
   // Check existing Supabase session
+  let sessionUnreachable = !navigator.onLine;
   if (sb) {
     try {
-      const { data } = await sb.auth.getSession();
+      const { data, error } = await sb.auth.getSession();
       if (data?.session?.user) {
+        rememberLastUser(data.session.user);
         await enterAppAs(data.session.user);
         return;
       }
+      // An expired session can't be renewed without a connection.
+      if (error && /fetch|network|retryable/i.test(`${error.name} ${error.message}`)) sessionUnreachable = true;
     } catch {
-      // Fall through
+      sessionUnreachable = true;
     }
   }
 
-  // Not signed in: ask once. Offline, or after choosing this device only, go straight to the local book.
+  // Only House Index members use the Chord Book. With no connection (a gig with no signal), the
+  // person last signed in on this device still gets their saved songs; signing out ends that.
+  const lastUser = recallLastUser();
+  if ((sessionUnreachable || !sb) && lastUser) {
+    await enterAppAs(lastUser);
+    return;
+  }
   setCurrentUserId("local");
-  if (!sb || !navigator.onLine || loadLocal("use_local_book", false)) {
+  // The test suites run a device-only book on this computer; the live site never offers one.
+  if (isLocalDevServer() && loadLocal("use_local_book", false)) {
     await enterAppAs({ id: "local" });
     return;
   }

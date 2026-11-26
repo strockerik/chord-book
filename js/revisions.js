@@ -3,6 +3,10 @@
 // in js/core.js (testing-skills/melody_test.py checks it). Add a line here with every release.
 
 export const REVISIONS = [
+  { version: "0.6.3", date: "2026-11-25", notes: [
+    "A House Index account is now required; “Use without signing in” is gone.",
+    "With no signal at a gig, the person last signed in on the device still opens their saved songs."
+  ] },
   { version: "0.6.2", date: "2026-11-25", notes: [
     "What’s new: tap the version number under You to see every release."
   ] },

@@ -66,13 +66,15 @@ __FIXTURE_BOOT__
         cspViolations.push(`${e.violatedDirective}: ${e.blockedURI}`);
       });
     }
-    const gate = doc?.getElementById("auth-gate");
-    if (gate && !gate.hidden) doc.getElementById("auth-continue-local-btn").click();
     if (doc && doc.querySelector(".sheet-page")) break;
     await sleep(60);
   }
 
   try {
+    // 0a. Only House Index members: no way past the sign-in screen on the live site
+    ok("Sign-in screen has no way in without an account",
+       !doc.getElementById("auth-continue-local-btn") && !doc.querySelector("#auth-gate .ghost-btn"));
+
     // 0. The empty message bar must not peek onto the screen or block taps
     const idleToast = win.getComputedStyle(doc.getElementById("toast-bar"));
     ok("Idle message bar is fully hidden", idleToast.visibility === "hidden" && idleToast.pointerEvents === "none",
