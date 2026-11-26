@@ -181,16 +181,18 @@ export function rangeFit(sung, range) {
 }
 
 /**
- * The key change (-6..+6 half steps) that best fits the melody inside your range: fewest notes
- * outside it, then the smallest move, then landing on one of `idealPitches` (your best keys).
+ * The key change that puts the melody best inside your range: every note inside first, then
+ * room to spare at both ends (up to a whole step each side), then the smallest move, then landing
+ * on one of `idealPitches` (your favourite keys). `shifts` limits the moves tried (default -6..+6).
  */
-export function bestRangeShift(sung, range, soundingKey, idealPitches = []) {
+export function bestRangeShift(sung, range, soundingKey, idealPitches = [], shifts = null) {
   let best = null;
-  for (let s = -6; s <= 6; s++) {
+  for (const s of shifts || Array.from({ length: 13 }, (_, i) => i - 6)) {
     const fit = rangeFit({ low: sung.low + s, high: sung.high + s }, range);
+    const room = Math.min(2, fit.low - range.low, range.high - fit.high);
     const inIdeal = idealPitches.includes(getKeyCenter(transposeKey(soundingKey, s)).pitch);
-    const score = fit.miss * 100 + Math.abs(s) * 2 - (inIdeal ? 1 : 0);
-    if (!best || score < best.score) best = { shift: s, fit, score };
+    const score = fit.miss * 100 - Math.max(0, room) * 10 + Math.abs(s) * 2 - (inIdeal ? 1 : 0);
+    if (!best || score < best.score) best = { shift: s, fit, score, room: Math.max(0, room) };
   }
   return best;
 }

@@ -416,8 +416,14 @@ export function getIdealVocalRangeRecommendations(songDraftOrRow, librarySongs =
     const planned = !alreadyIdeal && pureTranspose ? pureTranspose.semitoneShiftFromCurrent : 0;
     if (!planned || (dir && Math.sign(planned) !== dir)) {
       if (!dir) dir = -1; // no other clue: lower is the usual relief
-      // The nearest of your best keys that way, up to 5 half steps; otherwise a whole step.
       let shift = 0;
+      // With the notes known: the move that way (a whole step or more) that puts them best inside
+      // your range.
+      if (range) {
+        const way = [2, 3, 4, 5, 6].map((k) => dir * k);
+        shift = bestRangeShift(range.sung, range.voice, currentSoundingKey, idealCenters.map((c) => c.pitch), way).shift;
+      }
+      // Otherwise the nearest of your best keys that way, up to 5 half steps; else a whole step.
       for (let k = 1; k <= 5 && !shift; k++) {
         const pitch = getKeyCenter(transposeKey(currentSoundingKey, dir * k)).pitch;
         if (idealCenters.some((c) => c.pitch === pitch)) shift = dir * k;
@@ -463,7 +469,7 @@ export function renderAnalyticsDashboardHTML(songs = []) {
     <section class="analytics-panel ideal-keys-config-panel">
       <h4 class="analytics-panel-title">My best keys</h4>
       <p class="analytics-panel-desc">
-        Tap the keys you sing best in. Songs outside them will suggest a better key.
+        Tap the keys you sing best in. They’re only used for a new song before its melody range is known.
       </p>
       <div class="ideal-keys-chips" id="ideal-keys-chips-group">
         ${ALL_MAJOR_KEYS.map((k) => {
@@ -484,9 +490,9 @@ export function renderAnalyticsDashboardHTML(songs = []) {
 
   const maxCount = Math.max(1, ...data.activeProfiles.map((p) => p.songCount));
 
-  // Bad fit: songs you rated hard to sing, whose melody runs past your range, or (when the
-  // melody isn't known) that sound outside your best keys, each with the simplest fix. Tapping
-  // one opens it, where "Rewrite in ..." applies the fix.
+  // Bad fit: songs you rated hard to sing and songs whose melody runs past your range, each with
+  // the simplest fix. The range a song needs matters, not its key, so key alone never puts a song
+  // here.
   const voice = getVocalRange(songs);
   const badFits = songs.map((song) => {
     const keys = getSongEffectiveKeys(song);
@@ -495,13 +501,10 @@ export function renderAnalyticsDashboardHTML(songs = []) {
     const rating = song.vocal_rating;
     const ratedHard = comfort === "too_low" || comfort === "high_stretch" || (rating != null && rating <= 2);
     const range = rec?.range;
-    // Half a step from a best key is close enough; two or more is worth fixing.
-    const outside = range
-      ? !range.fits
-      : !!(rec && !rec.isAlreadyIdeal && rec.pureTranspose && Math.abs(rec.pureTranspose.semitoneShiftFromCurrent) >= 2);
+    const outside = !!range && !range.fits;
     if (!ratedHard && !outside) return null;
     let why = comfort === "high_stretch" ? "Too high" : comfort === "too_low" ? "Too low"
-      : rating != null && rating <= 2 ? `Rated ${rating}★` : "Outside your best keys";
+      : rating != null && rating <= 2 ? `Rated ${rating}★` : "Outside your range";
     if (!ratedHard && range) why = range.sung.over ? "Too high" : "Too low";
     const sings = range ? `Sings ${rangeText(range.sung)}` : `Sounds in ${keys.soundingKey}`;
     let fix;
@@ -528,6 +531,7 @@ export function renderAnalyticsDashboardHTML(songs = []) {
     return { song, sings, why, fix, ratedHard, target };
   }).filter(Boolean).sort((a, b) => (b.ratedHard - a.ratedHard) || a.song.title.localeCompare(b.song.title));
   const missingMelody = songsMissingMelody(songs).length;
+  const unchecked = voice ? songs.filter((x) => !sungRange(x)).length : songs.length;
   const withMelody = songs.filter((x) => sungRange(x)).length;
   const manual = getManualVocalRange();
   const noteOptions = (selected, blank) => `<option value="">${blank}</option>` +
@@ -554,8 +558,29 @@ export function renderAnalyticsDashboardHTML(songs = []) {
 
   return `
     <div class="analytics-grid">
-      ${pinnedHtml}
       ${unratedCount ? `<p class="keys-unrated-hint">${unratedCount} of ${songs.length} songs aren’t rated yet. Open a song and tap <strong>More</strong> to rate how it feels to sing.</p>` : ""}
+      ${rangePanel}
+      <section class="analytics-panel">
+        <h4 class="analytics-panel-title">Bad fit${badFits.length ? ` (${badFits.length})` : ""}</h4>
+        ${badFits.length ? `
+          <p class="analytics-panel-desc">Songs you rated hard to sing, and songs whose melody runs past your range. Tap the button to change the song to that key (you can undo it), or tap a title to open it.</p>
+          <div class="best-fit-songs-list">
+            ${badFits.map(({ song, sings, why, fix, target }) => `
+              <div class="fit-song-row is-bad-fit-row">
+                <div class="fit-song-main" data-open-song="${esc(song.id)}" role="button" tabindex="0" title="Open ${esc(song.title)}">
+                  <strong class="fit-song-title">${esc(song.title)}</strong>
+                  <span class="fit-song-sub">${esc(sings)} • ${esc(fix)}</span>
+                </div>
+                <div class="fit-song-badges">
+                  <span class="fit-badge is-bad-fit">${esc(why)}</span>
+                  ${target ? `<button type="button" class="solid-btn small-btn" data-rewrite-song="${esc(song.id)}">${esc(target)}</button>` : ""}
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<p class="analytics-panel-desc">${voice ? "Every song with a known melody fits your range." : "No songs rated hard to sing."}</p>`}
+        ${unchecked ? `<p class="analytics-panel-desc">${voice ? `${unchecked} song${unchecked === 1 ? "" : "s"} can’t be checked yet: no melody range.` : "Set your range above to check every song against it."}</p>` : ""}
+      </section>
       <div class="analytics-hero-cards">
         <div class="stat-card is-highlight">
           <span class="stat-eyebrow">Your money key</span>
@@ -572,8 +597,6 @@ export function renderAnalyticsDashboardHTML(songs = []) {
           </span>
         </div>
       </div>
-
-      ${rangePanel}
 
       <section class="analytics-panel">
         <h4 class="analytics-panel-title">Keys you sing in</h4>
@@ -627,26 +650,7 @@ export function renderAnalyticsDashboardHTML(songs = []) {
         </div>
       </section>
 
-      <section class="analytics-panel">
-        <h4 class="analytics-panel-title">Bad fit${badFits.length ? ` (${badFits.length})` : ""}</h4>
-        ${badFits.length ? `
-          <p class="analytics-panel-desc">Songs you rated hard to sing, songs whose melody runs past your range, and songs without a range two or more half steps from your best keys. Tap the button to change the song to that key (you can undo it), or tap a title to open it.</p>
-          <div class="best-fit-songs-list">
-            ${badFits.map(({ song, sings, why, fix, target }) => `
-              <div class="fit-song-row is-bad-fit-row">
-                <div class="fit-song-main" data-open-song="${esc(song.id)}" role="button" tabindex="0" title="Open ${esc(song.title)}">
-                  <strong class="fit-song-title">${esc(song.title)}</strong>
-                  <span class="fit-song-sub">${esc(sings)} • ${esc(fix)}</span>
-                </div>
-                <div class="fit-song-badges">
-                  <span class="fit-badge is-bad-fit">${esc(why)}</span>
-                  ${target ? `<button type="button" class="solid-btn small-btn" data-rewrite-song="${esc(song.id)}">${esc(target)}</button>` : ""}
-                </div>
-              </div>
-            `).join("")}
-          </div>
-        ` : `<p class="analytics-panel-desc">${voice ? "Every song fits your range or sits in one of your best keys." : "Every song sits in one of your best keys."}</p>`}
-      </section>
+      ${pinnedHtml}
     </div>
   `;
 }

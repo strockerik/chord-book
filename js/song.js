@@ -781,7 +781,8 @@ function renderSmartAdvisorBanner(parsed, currentShapesKey, soundingKey) {
   const tips = [];
   // A song outside your sweet-spot keys gets an offer to rewrite it in the nearest one, shown
   // alongside the easier-chords idea rather than instead of it.
-  if (rec && !rec.isAlreadyIdeal && rec.pureTranspose) {
+  // Only the range a song needs (or how you said it feels) earns a suggestion here; key alone doesn't.
+  if (rec && !rec.isAlreadyIdeal && rec.pureTranspose && (rec.range || rec.felt)) {
     const pt = rec.pureTranspose;
     const capoOpt = rec.easyCapo;
     const btns = [
@@ -811,7 +812,7 @@ function renderSmartAdvisorBanner(parsed, currentShapesKey, soundingKey) {
   // A better key for your voice waits under More: a dot on the button says so.
   const moreBtn = document.getElementById("toggle-more-controls-btn");
   if (moreBtn) {
-    const hasVoiceTip = !!(rec && !rec.isAlreadyIdeal && rec.pureTranspose);
+    const hasVoiceTip = !!(rec && !rec.isAlreadyIdeal && rec.pureTranspose && (rec.range || rec.felt));
     moreBtn.classList.toggle("has-tip", hasVoiceTip);
     moreBtn.setAttribute("aria-label", hasVoiceTip ? "More (a better key for your voice)" : "More");
   }

@@ -3,6 +3,11 @@
 // in js/core.js (testing-skills/melody_test.py checks it). Add a line here with every release.
 
 export const REVISIONS = [
+  { version: "0.6.6", date: "2026-11-25", notes: [
+    "Range first: a song is judged by the notes it needs, not its key. Bad fit lists only songs you rated hard and songs whose notes run past your range.",
+    "Suggested keys leave room at both ends of your range (up to a whole step), with the smallest move that does it.",
+    "My Keys opens with your vocal range and Bad fit; it looks up missing melody ranges on its own."
+  ] },
   { version: "0.6.5", date: "2026-11-25", notes: [
     "My Keys → Bad fit: one tap rewrites a song in the key that suits your voice (or takes the capo off), with Undo.",
     "Rewriting a song you rated hard clears that rating, since it was about the old key.",

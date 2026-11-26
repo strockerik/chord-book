@@ -129,6 +129,7 @@ function openWhatsNew() {
 
 // A new song's melody range is looked up a moment after it is added, in one call for a whole
 // set list, without holding anything up.
+let melodyAutoLookupDone = false;
 const melodyQueue = new Set();
 let melodyTimer = null;
 function queueMelodyLookup(id) {
@@ -815,6 +816,21 @@ async function bootApp() {
     };
     renderAnalyticsModal();
     openSheet("analytics-modal", e.currentTarget);
+    // Songs without a melody range get one looked up, once per visit, so they can be checked
+    // against your range.
+    const missing = songsMissingMelody(songs);
+    if (getCloud() && missing.length && !melodyAutoLookupDone) {
+      melodyAutoLookupDone = true;
+      const btn = document.getElementById("find-melody-ranges-btn");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Looking up melody ranges…";
+      }
+      findMelodyRanges(missing, { quiet: true }).then((r) => {
+        if (!document.getElementById("analytics-modal")?.hidden) renderAnalyticsModal();
+        if (r.found) toast(`Found the melody range for ${r.found} song${r.found === 1 ? "" : "s"}.`);
+      });
+    }
   });
 
   document.getElementById("nav-setlists-btn")?.addEventListener("click", async (e) => {

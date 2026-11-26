@@ -54,6 +54,11 @@ const her = m.rangeFit({ low: 57, high: 76 }, voice);
 ok("A woman's melody fits an octave down", her.miss === 0 && her.octave === -12, JSON.stringify(her));
 const best = m.bestRangeShift({ low: 48, high: 67 }, voice, "C");
 ok("Three half steps too high moves down three", best.shift === -3 && best.fit.miss === 0, JSON.stringify(best));
+const roomy = m.bestRangeShift({ low: 48, high: 60 }, { low: 45, high: 64 }, "C");
+ok("A melody that already fits with room to spare stays where it is", roomy.shift === 0 && roomy.room === 2, JSON.stringify(roomy));
+const tight = m.bestRangeShift({ low: 46, high: 65 }, { low: 45, high: 64 }, "C");
+ok("A melody one step too high moves for room, not just to squeak inside",
+   tight.fit.miss === 0 && tight.fit.high <= 64 && tight.fit.low >= 45 && tight.shift === -1, JSON.stringify(tight));
 ok("A melody wider than your range can't fit", m.bestRangeShift({ low: 40, high: 70 }, voice, "C").fit.miss > 0);
 
 const lib = [
@@ -69,8 +74,9 @@ ok("Fewer than two rated songs with a melody gives no range", m.deriveVocalRange
 ok("Songs still missing a melody are listed for lookup", m.songsMissingMelody(lib).map((x) => x.id).join() === "4");
 
 const rec = a.getIdealVocalRangeRecommendations(lib[2], lib);
-ok("A too-high song gets a rewrite that brings every note inside",
-   rec.range && !rec.range.fits && rec.pureTranspose?.targetShapesKey === "A" && rec.range.after?.miss === 0,
+ok("A too-high song moves to the key that leaves room at both ends of your range",
+   rec.range && !rec.range.fits && rec.pureTranspose?.targetShapesKey === "Ab" && rec.range.after?.miss === 0
+   && rec.range.after.low > r.low && rec.range.after.high < r.high,
    JSON.stringify({ range: rec.range, pt: rec.pureTranspose }));
 ok("A song whose notes fit counts as a good fit in any key", a.getIdealVocalRangeRecommendations(lib[0], lib).isAlreadyIdeal === true);
 
@@ -94,7 +100,7 @@ m.setManualVocalRange(null);
 const page = a.renderAnalyticsDashboardHTML(lib);
 ok("My Keys shows your range", page.includes("Your vocal range") && page.includes("A2–G4"));
 ok("Bad fit lists the too-high song with the notes it would sing",
-   /Bad fit \(1\)/.test(page) && /Sings D3–A#4 • Rewrite in A to sing B2–G4/.test(page), page.match(/fit-song-sub">[^<]*/g));
+   /Bad fit \(1\)/.test(page) && /Sings D3–A#4 • Rewrite in Ab to sing A#2–F#4/.test(page), page.match(/fit-song-sub">[^<]*/g));
 ok("My Keys offers to look up the missing melody", page.includes("Look up 1 melody range with AI"));
 ok("What's new lists this release first", REVISIONS[0]?.version === APP_VERSION && REVISIONS[0].notes.length > 0,
    `${REVISIONS[0]?.version} vs ${APP_VERSION}`);
