@@ -31,6 +31,10 @@ const s1 = { id: "1", title: "One", key: "G", capo: 2, chordpro: sheet("G"), lay
 s1.layout_prefs.melody = m.melodyFromRecording(s1, { recording_key: "A", low: 45, high: 64 });
 const sung1 = m.sungRange(s1);
 ok("Capo song sings the recording's notes", sung1.low === 45 && sung1.high === 64, JSON.stringify(sung1));
+ok("The original recording's key is saved with the notes",
+   s1.layout_prefs.melody.recording_key === "A" && s1.layout_prefs.melody.key === "G" && m.storedMelody(s1).recordingKey === "A");
+ok("Correcting the notes by hand keeps the recording's key",
+   m.melodyFromSung(s1, 44, 63).recording_key === "A" && m.melodyFromSung(s1, 44, 63).source === "you");
 ok("Transposing up 2 raises the sung notes 2", m.sungRange({ ...s1, preferred_transpose: 2 }).high === 66);
 ok("Half step down tuning lowers the sung notes", m.sungRange({ ...s1, tuning: "Eb Ab Db Gb Bb Eb" }).high === 63);
 ok("A sheet rewritten in a new key keeps the melody with it",

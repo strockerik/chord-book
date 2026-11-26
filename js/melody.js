@@ -3,7 +3,8 @@
 // melody do. Each song keeps those two notes in layout_prefs.melody, measured against the key the
 // sheet is written in (no capo, standard tuning), so transposing, a capo, or a half-step-down
 // tuning move them along with the chords:
-//   { low: 45, high: 64, key: "G", source: "ai" | "you", confidence?: "high"|"medium"|"low" }
+//   { low: 45, high: 64, key: "G", source: "ai" | "you", confidence?: "high"|"medium"|"low",
+//     recording_key?: "A" }   (the key of the original recording the AI took the notes from)
 // Notes are MIDI numbers (60 = middle C, C4). Singers choose their octave (a man sings a woman's
 // song an octave down), so fitting a song to a voice tries the octave above and below too.
 
@@ -59,7 +60,13 @@ export function storedMelody(song) {
   const m = song?.layout_prefs?.melody;
   if (!m || !Number.isFinite(m.low) || !Number.isFinite(m.high) || m.high <= m.low) return null;
   const shift = m.key ? keyInterval(m.key, sheetBasics(song).writtenKey) : 0;
-  return { low: m.low + shift, high: m.high + shift, source: m.source || "ai", confidence: m.confidence || null };
+  return {
+    low: m.low + shift,
+    high: m.high + shift,
+    source: m.source || "ai",
+    confidence: m.confidence || null,
+    recordingKey: m.recording_key || null
+  };
 }
 
 /** The notes you sing the song on now, with its transpose, capo, and tuning, or null. */
@@ -73,7 +80,11 @@ export function sungRange(song) {
 /** A melody you sing on `low`..`high` right now, saved against the written key. */
 export function melodyFromSung(song, low, high, source = "you") {
   const shift = soundingShift(song);
-  return { low: low - shift, high: high - shift, key: sheetBasics(song).writtenKey, source };
+  const melody = { low: low - shift, high: high - shift, key: sheetBasics(song).writtenKey, source };
+  // Correcting the notes by hand doesn't change which key the original recording is in.
+  const recordingKey = song?.layout_prefs?.melody?.recording_key;
+  if (recordingKey) melody.recording_key = recordingKey;
+  return melody;
 }
 
 /**
@@ -85,7 +96,14 @@ export function melodyFromRecording(song, { recording_key, low, high, confidence
   const soundsAt = transposeKey(b.writtenKey, b.capo + b.tuningOffset);
   const toSheet = recording_key ? keyInterval(recording_key, soundsAt) : 0;
   const shift = toSheet - b.capo - b.tuningOffset;
-  return { low: low + shift, high: high + shift, key: b.writtenKey, source: "ai", confidence: confidence || null };
+  return {
+    low: low + shift,
+    high: high + shift,
+    key: b.writtenKey,
+    source: "ai",
+    confidence: confidence || null,
+    recording_key: recording_key ? normalizeKeyName(recording_key) : null
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -757,11 +757,12 @@ function refreshMelodyPickers() {
   highPick.value = sung ? inList(sung.high) : "";
   if (hint) {
     const m = storedMelody(shown);
+    const original = m?.recordingKey ? ` The original recording is in ${m.recordingKey}.` : "";
     hint.textContent = !m
       ? "Lowest and highest notes of the melody, as you sing it in this key. Look up asks the AI."
       : m.source === "ai"
-        ? `AI estimate from the recording${m.confidence === "low" ? " (unsure)" : ""}. Change either note if it’s off.`
-        : "Set by you, for the key on screen.";
+        ? `AI estimate from the recording${m.confidence === "low" ? " (unsure)" : ""}.${original} Change either note if it’s off.`
+        : `Set by you, for the key on screen.${original}`;
   }
 }
 
@@ -981,8 +982,9 @@ async function bakeTransposedKeyIntoChordPro() {
   // The melody moves with the sheet, so you still sing the same notes.
   const melodyNow = storedMelody(songAsShown());
   if (melodyNow) {
-    const { source, confidence } = melodyNow;
+    const { source, confidence, recordingKey } = melodyNow;
     viewState.melody = { low: melodyNow.low + viewState.semitoneDelta, high: melodyNow.high + viewState.semitoneDelta, key: newKey, source, confidence };
+    if (recordingKey) viewState.melody.recording_key = recordingKey;
     updated.layout_prefs = { ...(updated.layout_prefs || {}), melody: viewState.melody };
   }
 
