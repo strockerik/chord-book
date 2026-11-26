@@ -82,10 +82,94 @@ assert("Nashville in G: G=1, C=4, D/F#=5/7, Em7=6m7",
   [toNashville("G","G"), toNashville("C","G"), toNashville("D/F#","G"), toNashville("Em7","G")].join(", ")
 );
 
-// 7. Chord diagrams exist for all chords in a typical worship progression + movable barres
-for (const ch of ["C", "G", "G/B", "Dsus4", "D", "D/E", "Em", "Am7", "Em7", "D/F#", "D/C", "Am", "Cadd9", "F#m7", "Bbm"]) {{
+// 7. Chord diagrams exist for all chords in a typical worship progression + movable barres + extended/slash chords
+const sampleVoicings = [
+  "C", "C2", "G", "G2", "G/B", "Dsus4", "D", "D2", "D4", "G4", "D/E", "Em", "Am7", "Em7",
+  "D/F#", "D/C", "Am", "Cadd9", "F#m7", "Bbm", "A2", "E2", "E5", "C#5", "F#m7b5", "Bmaj9",
+  "G7sus4", "C6/9", "Ammaj7", "E7#9", "A7b9", "F/A", "C#m/B", "Bb/D", "Eb/G", "G#m", "C#m"
+];
+for (const ch of sampleVoicings) {{
   const v = getChordVoicing(ch);
   assert("voicing exists for " + ch, v && Array.isArray(v.frets) && v.frets.length === 6, JSON.stringify(v));
+}}
+// Confirm G#m and C#m barres sit on 4th fret
+assert("G#m & C#m sit on baseFret 4",
+  getChordVoicing("G#m")?.baseFret === 4 && getChordVoicing("C#m")?.baseFret === 4,
+  JSON.stringify({{ ghm: getChordVoicing("G#m"), csm: getChordVoicing("C#m") }}));
+
+// 7a-bis. Exhaustive coverage: every quality in SPEC 5.3 + acoustic 2/4/5 across all 12 chromatic roots
+const allQualities = [
+  "", "m", "min", "-", "maj7", "M7", "Δ", "Δ7", "maj9", "7", "9", "11", "13",
+  "sus2", "sus4", "sus", "7sus4", "7sus2", "9sus4", "add9", "add11", "add2", "add4",
+  "6", "6/9", "69", "m6", "m7", "min7", "-7", "m9", "m11", "m13", "mmaj7",
+  "m7b5", "ø", "ø7", "dim", "°", "dim7", "°7", "aug", "+", "aug7", "5", "4", "2",
+  "7#9", "7b9", "7#5", "7b5", "7(b9)", "7(#9)"
+];
+let missingVoicings = [];
+for (const root of CHROMATIC_SHARPS.concat(["Db", "Eb", "Gb", "Ab", "Bb"])) {{
+  for (const q of allQualities) {{
+    const name = root + q;
+    const v = getChordVoicing(name);
+    if (!v || !Array.isArray(v.frets) || v.frets.length !== 6 || !(v.baseFret >= 1)) {{
+      missingVoicings.push(name);
+    }}
+  }}
+}}
+assert("all 17 roots x all qualities return a valid 6-string voicing (0 missing)",
+  missingVoicings.length === 0, "missing: " + missingVoicings.slice(0, 10).join(", "));
+
+// 7a-ter. Musical pitch & geometry validator over EVERY entry in BUILTIN_VOICINGS
+const OPEN_PITCHES = [4, 9, 2, 7, 11, 4];
+let voicingErrors = [];
+for (const [name, v] of Object.entries(BUILTIN_VOICINGS)) {{
+  if (!v || !Array.isArray(v.frets) || v.frets.length !== 6) {{
+    voicingErrors.push(name + ": invalid frets array");
+    continue;
+  }}
+  const bf = v.baseFret || 1;
+  if (!Number.isInteger(bf) || bf < 1 || bf > 15) {{
+    voicingErrors.push(name + ": bad baseFret " + bf);
+  }}
+  const nonMuted = v.frets.filter((f) => f >= 0);
+  if (nonMuted.length < 3) {{
+    voicingErrors.push(name + ": fewer than 3 sounding strings");
+  }}
+  for (const f of v.frets) {{
+    if (!Number.isInteger(f) || f < -1 || f > 5) {{
+      voicingErrors.push(name + ": out-of-range fret " + f);
+    }}
+  }}
+  if (Array.isArray(v.barres)) {{
+    for (const b of v.barres) {{
+      if (!Number.isInteger(b.fret) || b.fret < 1 || b.fret > 5 || b.from < 0 || b.to > 5 || b.from >= b.to) {{
+        voicingErrors.push(name + ": invalid barre " + JSON.stringify(b));
+      }}
+    }}
+  }}
+  // For every slash chord, verify the lowest sounding string pitch equals the bass pitch class
+  const p = parseChord(name);
+  if (p && p.bass) {{
+    const sIdx = v.frets.findIndex((f) => f >= 0);
+    const f = v.frets[sIdx];
+    const abs = f === 0 ? 0 : bf + f - 1;
+    const bassPitch = (OPEN_PITCHES[sIdx] + abs) % 12;
+    const wantPitch = NOTE_TO_PITCH[p.bass];
+    if (bassPitch !== wantPitch) {{
+      voicingErrors.push(`${{name}}: lowest sounding string pitch ${{bassPitch}} !== ${{p.bass}} (${{wantPitch}})`);
+    }}
+  }}
+}}
+assert("every BUILTIN_VOICINGS entry has valid frets/barres and exact slash bass pitch",
+  voicingErrors.length === 0, voicingErrors.join("; "));
+
+// Dynamic slash bass placement when not explicitly listed in BUILTIN_VOICINGS
+for (const [ch, wantBass] of [["F#m7/E", 4], ["Cadd9/E", 4], ["Gm/F", 5]]) {{
+  const v = getChordVoicing(ch);
+  const sIdx = v.frets.findIndex((f) => f >= 0);
+  const f = v.frets[sIdx];
+  const actualBass = (OPEN_PITCHES[sIdx] + (f === 0 ? 0 : (v.baseFret || 1) + f - 1)) % 12;
+  assert("dynamic slash voicing puts bass on lowest string for " + ch,
+    sIdx >= 0 && actualBass === wantBass, JSON.stringify({{ ch, v, actualBass, wantBass }}));
 }}
 
 // 7b. Tunings: half step down lowers the sounding key, and the others keep it

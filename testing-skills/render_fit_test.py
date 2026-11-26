@@ -411,6 +411,46 @@ __FIXTURE_BOOT__
     win.dispatchEvent(new Event("resize"));
     await sleep(60);
 
+    // 8c. Barre chord SVG fret labels (e.g. "4fr", "10fr") and 5-fret diagrams render unclipped
+    const { renderChordDiagramSVG } = await import("/js/render.js");
+    const svgHost = doc.createElement("div");
+    svgHost.style.cssText = "position:fixed;left:20px;top:20px;z-index:9999;background:#fff;padding:8px;";
+    svgHost.innerHTML = [
+      renderChordDiagramSVG("C#m"),
+      renderChordDiagramSVG("G#m"),
+      renderChordDiagramSVG("Bm"),
+      renderChordDiagramSVG("Badd9"),
+      renderChordDiagramSVG("G", { customDefines: { "G": { frets: [1, 3, 3, 2, 1, 1], baseFret: 10, barres: [{ fret: 1, from: 0, to: 5 }] } } })
+    ].join("");
+    doc.body.appendChild(svgHost);
+    await sleep(30);
+    const cards = Array.from(svgHost.querySelectorAll(".chord-card"));
+    const checkBarreLabel = (card, expected) => {
+      const svg = card.querySelector("svg.chord-svg");
+      const vb = svg.viewBox.baseVal;
+      const frTxt = Array.from(svg.querySelectorAll("text")).find((t) => /fr$/.test(t.textContent || ""));
+      if (!frTxt) return { pass: false, detail: `missing fr text on ${card.dataset.chord}` };
+      const bb = frTxt.getBBox();
+      const pass = frTxt.textContent.trim() === expected && bb.x >= 0 && bb.x + bb.width <= vb.width;
+      return { pass, detail: `${card.dataset.chord}: "${frTxt.textContent}" bbox=[${bb.x.toFixed(1)}..${(bb.x + bb.width).toFixed(1)}] vbW=${vb.width}` };
+    };
+    const rCsm = checkBarreLabel(cards[0], "4fr");
+    const rGsm = checkBarreLabel(cards[1], "4fr");
+    const rBm = checkBarreLabel(cards[2], "2fr");
+    const r10 = checkBarreLabel(cards[4], "10fr");
+    ok("Barre chord fret labels (4fr, 2fr, 10fr) render completely inside SVG viewBox",
+       rCsm.pass && rGsm.pass && rBm.pass && r10.pass,
+       [rCsm.detail, rGsm.detail, rBm.detail, r10.detail].join(" | "));
+    // Verify 5-fret chord (Badd9 movable uses fret 5) draws 5 fret spaces and doesn't clamp fret 5 to fret 4
+    const svg5 = cards[3].querySelector("svg.chord-svg");
+    const vb5 = svg5.viewBox.baseVal;
+    const circles5 = Array.from(svg5.querySelectorAll("circle[fill='currentColor']")).map((c) => parseFloat(c.getAttribute("cy")));
+    const uniqueCy5 = new Set(circles5.map((y) => Math.round(y)));
+    ok("5-fret movable voicing (Badd9) renders 5 fret rows without clamping fret 5 dots onto fret 4",
+       vb5.height > 92 && Math.max(...circles5) > 20 + 4 * 14 && uniqueCy5.size >= 3,
+       `vbH=${vb5.height} maxCy=${Math.max(...circles5)} unique=${uniqueCy5.size}`);
+    svgHost.remove();
+
     // 9. Viewport Responsive Smoke Tests at 360px, 390px, and 430px (SPEC 8 & 10)
     for (const vw of [360, 390, 430]) {
       frame.style.width = vw + "px";

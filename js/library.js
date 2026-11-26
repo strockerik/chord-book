@@ -39,7 +39,7 @@ import {
 import { initSongController, openSongView, openSongEditor, getActiveSong, showEmptySongStage, applyMelodyToOpenSong, rewriteInBetterKey } from "./song.js";
 import { initImportModal, lookUpMelodyRanges } from "./ai.js";
 import { REVISIONS } from "./revisions.js";
-import { melodyFromRecording, storedMelody, songsMissingMelody, getVocalRange, setManualVocalRange } from "./melody.js";
+import { melodyFromRecording, storedMelody, songsMissingMelody, getVocalRange, setManualVocalRange, getManualVocalRange, JOHN_MAYER_RANGE } from "./melody.js";
 import { initPerformanceControls } from "./perform.js";
 import { loadSetlists, renderSetlistsSheetHTML, getSetlistItems } from "./setlists.js";
 
@@ -768,23 +768,33 @@ async function bootApp() {
       });
       const lowPick = body.querySelector("#vocal-range-low");
       const highPick = body.querySelector("#vocal-range-high");
+      const falsettoPick = body.querySelector("#vocal-range-falsetto");
       const onRangePick = () => {
         const low = parseInt(lowPick.value, 10);
         const high = parseInt(highPick.value, 10);
+        const falsettoVal = parseInt(falsettoPick?.value || "", 10);
+        const hasFalsetto = Number.isFinite(falsettoVal);
         if (!lowPick.value || !highPick.value) {
-          // "Auto" on either goes back to the range your songs show.
+          // "Auto" on both goes back to the range your songs show.
           if (!lowPick.value && !highPick.value) setManualVocalRange(null);
           else {
-            // One note picked: fill the other from your songs, or wait for it.
             const auto = getVocalRange(songs);
-            if (auto && auto.from === "songs") setManualVocalRange({ low: lowPick.value ? low : auto.low, high: highPick.value ? high : auto.high });
-            else return;
+            if (auto && auto.from === "songs") {
+              const effLow = lowPick.value ? low : auto.low;
+              const effHigh = highPick.value ? high : auto.high;
+              const prevFal = getManualVocalRange()?.falsettoHigh;
+              const fal = hasFalsetto ? falsettoVal : prevFal;
+              setManualVocalRange({ low: effLow, high: effHigh, ...(Number.isFinite(fal) && fal > effHigh ? { falsettoHigh: fal } : {}) });
+            } else return;
           }
         } else if (high <= low) {
           toastError("Pick a highest note above the lowest.");
           return;
+        } else if (hasFalsetto && falsettoVal <= high) {
+          toastError("Pick a falsetto top above your highest standard note.");
+          return;
         } else {
-          setManualVocalRange({ low, high });
+          setManualVocalRange({ low, high, ...(hasFalsetto ? { falsettoHigh: falsettoVal } : {}) });
         }
         renderAnalyticsModal();
         const active = getActiveSong();
@@ -792,6 +802,14 @@ async function bootApp() {
       };
       lowPick?.addEventListener("change", onRangePick);
       highPick?.addEventListener("change", onRangePick);
+      falsettoPick?.addEventListener("change", onRangePick);
+      body.querySelector("#apply-john-mayer-range-btn")?.addEventListener("click", () => {
+        setManualVocalRange(JOHN_MAYER_RANGE);
+        renderAnalyticsModal();
+        const active = getActiveSong();
+        if (active) openSongView(active);
+        toast("Vocal range set to G2–G4 (falsetto up to D5).");
+      });
       body.querySelector("#find-melody-ranges-btn")?.addEventListener("click", async (ev) => {
         const btn = ev.currentTarget;
         btn.disabled = true;

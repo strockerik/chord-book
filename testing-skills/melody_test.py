@@ -96,6 +96,18 @@ ok("A 1★ song gets a key to try", !!a.getIdealVocalRangeRecommendations(feltOn
 m.setManualVocalRange({ low: 43, high: 72 });
 ok("A range you set wins over the songs", m.getVocalRange(lib).from === "you" && m.getVocalRange(lib).high === 72);
 ok("With your wider range the high song fits", a.getIdealVocalRangeRecommendations(lib[2], lib).range.fits === true);
+m.setManualVocalRange(m.JOHN_MAYER_RANGE);
+const jm = m.getVocalRange(lib);
+ok("John Mayer range preset saves standard and falsetto top notes",
+   jm.low === 43 && jm.high === 67 && jm.falsettoHigh === 74, JSON.stringify(jm));
+const falHit = m.rangeFit({ low: 48, high: 71 }, jm);
+const falMiss = m.rangeFit({ low: 48, high: 76 }, jm);
+ok("Falsetto flag notes B4 inside D5 falsetto while still treating it as above standard range",
+   falHit.miss > 0 && falHit.inFalsetto === true && falMiss.miss > 0 && falMiss.inFalsetto === false,
+   JSON.stringify({ falHit, falMiss }));
+const falShift = m.bestRangeShift({ low: 48, high: 71 }, jm, "C");
+ok("Best range shift keeps songs inside standard voice rather than leaving them in falsetto",
+   falShift.shift < 0 && falShift.fit.miss === 0 && falShift.fit.high <= jm.high, JSON.stringify(falShift));
 m.setManualVocalRange(null);
 
 const page = a.renderAnalyticsDashboardHTML(lib);

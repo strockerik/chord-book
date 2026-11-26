@@ -3,6 +3,11 @@
 // in js/core.js (testing-skills/melody_test.py checks it). Add a line here with every release.
 
 export const REVISIONS = [
+  { version: "0.7.3", date: "2026-11-26", notes: [
+    "Expanded the guitar chord fingering database with acoustic 2/4 chords, power chords, jazz/extended shapes, and curated slash voicings across every key.",
+    "Fixed barre chord fret labels (like “4fr” on C#m and G#m) clipping on the left edge, and added full 5-fret diagram support.",
+    "Added a Falsetto top note setting and one-tap John Mayer range preset (G2–G4 standard voice, falsetto up to D5) in My Keys."
+  ] },
   { version: "0.7.2", date: "2026-11-26", notes: [
     "Editing the original recording shows the AI’s key in any spelling (Gb appears as F#), and the editor closes when you switch songs.",
     "Fixing a key label recalculates the range from the original whenever it came from the original, including one you entered yourself."

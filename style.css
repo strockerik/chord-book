@@ -944,7 +944,7 @@ button, input, select, textarea {
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  padding: 3px 4px;
+  padding: 4px 6px;
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -959,10 +959,27 @@ button, input, select, textarea {
   font-weight: 700;
   font-size: 0.76rem;
   color: var(--accent);
+  white-space: nowrap;
 }
 .chord-svg {
   display: block;
   height: calc(76px * var(--sheet-diag-scale, 1));
+  width: auto;
+}
+.inspector-diagram-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 10px 0 4px;
+}
+.inspector-diagram-wrap .chord-card {
+  padding: 10px 14px;
+}
+.inspector-diagram-wrap .chord-card-name {
+  font-size: 1rem;
+  margin-bottom: 4px;
+}
+.inspector-diagram-wrap .chord-svg {
+  height: 156px;
   width: auto;
 }
 .sheet-page.is-ultra-compact .sheet-diagrams-strip {

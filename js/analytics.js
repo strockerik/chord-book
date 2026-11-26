@@ -31,7 +31,8 @@ import {
   midiToNote,
   songsMissingMelody,
   NOTE_LOWEST,
-  NOTE_HIGHEST
+  NOTE_HIGHEST,
+  JOHN_MAYER_RANGE
 } from "./melody.js";
 
 /**
@@ -505,7 +506,7 @@ export function renderAnalyticsDashboardHTML(songs = []) {
     if (!ratedHard && !outside) return null;
     let why = comfort === "high_stretch" ? "Too high" : comfort === "too_low" ? "Too low"
       : rating != null && rating <= 2 ? `Rated ${rating}★` : "Outside your range";
-    if (!ratedHard && range) why = range.sung.over ? "Too high" : "Too low";
+    if (!ratedHard && range) why = range.sung.over ? (range.sung.inFalsetto ? "Falsetto" : "Too high") : "Too low";
     const sings = range ? `Sings ${rangeText(range.sung)}` : `Sounds in ${keys.soundingKey}`;
     let fix;
     if (rec?.pureTranspose && (outside || rec.felt)) {
@@ -542,16 +543,20 @@ export function renderAnalyticsDashboardHTML(songs = []) {
         <h4 class="analytics-panel-title">Your vocal range</h4>
         ${voice ? `
           <p class="vocal-range-big"><strong>${esc(rangeText(voice))}</strong>
-            <span class="stat-sub">${voice.from === "you" ? "Set by you" : `From ${voice.count} songs you sing well`}</span></p>
+            <span class="stat-sub">${voice.from === "you" ? "Set by you" : `From ${voice.count} songs you sing well`}${voice.falsettoHigh ? ` • Falsetto ${esc(midiToNote(voice.high + 1))}–${esc(midiToNote(voice.falsettoHigh))}` : ""}</span></p>
           ${voice.from === "songs" && voice.stretchHigh != null ? `<p class="analytics-panel-desc">Songs reaching ${esc(midiToNote(voice.stretchHigh))} felt like a stretch.</p>` : ""}
           ${voice.from === "songs" && voice.stretchLow != null ? `<p class="analytics-panel-desc">Songs going down to ${esc(midiToNote(voice.stretchLow))} felt too low.</p>` : ""}
         ` : `<p class="analytics-panel-desc">Rate two or more songs Sweet spot (or 4★) that have a melody range, or set your range here.</p>`}
         <div class="vocal-range-pickers">
           <label>Lowest <select id="vocal-range-low" class="input-select small-select" aria-label="Your lowest comfortable note">${noteOptions(manual?.low, "Auto")}</select></label>
           <label>Highest <select id="vocal-range-high" class="input-select small-select" aria-label="Your highest comfortable note">${noteOptions(manual?.high, "Auto")}</select></label>
+          <label>Falsetto top <select id="vocal-range-falsetto" class="input-select small-select" aria-label="Highest comfortable falsetto note">${noteOptions(manual?.falsettoHigh, "Off")}</select></label>
         </div>
-        <p class="analytics-panel-desc">Melody known for ${withMelody} of ${songs.length} songs. Each song’s lowest and highest sung notes are under More → Singing and tuning.</p>
-        ${missingMelody ? `<button type="button" class="ghost-btn small-btn" id="find-melody-ranges-btn">Look up ${missingMelody} melody range${missingMelody === 1 ? "" : "s"} with AI</button>` : ""}
+        <p class="analytics-panel-desc">Songs are matched to your standard range; falsetto is shown for reference. Melody known for ${withMelody} of ${songs.length} songs.</p>
+        <div class="more-inline">
+          <button type="button" class="ghost-btn small-btn" id="apply-john-mayer-range-btn">Use John Mayer range (${esc(rangeText(JOHN_MAYER_RANGE))}, falsetto ${esc(midiToNote(JOHN_MAYER_RANGE.falsettoHigh))})</button>
+          ${missingMelody ? `<button type="button" class="ghost-btn small-btn" id="find-melody-ranges-btn">Look up ${missingMelody} melody range${missingMelody === 1 ? "" : "s"} with AI</button>` : ""}
+        </div>
       </section>
   `;
   const unratedCount = songs.filter((s) => s.vocal_rating == null && !s.vocal_comfort).length;

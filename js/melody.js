@@ -21,6 +21,8 @@ const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", 
 // The notes the pickers offer: C2 (a low bass note) to C6 (a high soprano note).
 export const NOTE_LOWEST = 36;
 export const NOTE_HIGHEST = 84;
+// John Mayer: lyric baritone with comfortable standard (chest/mix) voice G2–G4 and falsetto G#4–D5.
+export const JOHN_MAYER_RANGE = { low: 43, high: 67, falsettoHigh: 74 };
 
 export function midiToNote(midi) {
   if (!Number.isFinite(midi)) return "";
@@ -229,11 +231,22 @@ export function melodyAfterKeyFix(song, newKey) {
 // ---------------------------------------------------------------------------
 export function getManualVocalRange() {
   const r = loadLocal("vocal_range", null);
-  return r && Number.isFinite(r.low) && Number.isFinite(r.high) && r.high > r.low ? { low: r.low, high: r.high } : null;
+  if (!r || !Number.isFinite(r.low) || !Number.isFinite(r.high) || r.high <= r.low) return null;
+  const out = { low: r.low, high: r.high };
+  if (Number.isFinite(r.falsettoHigh) && r.falsettoHigh > r.high) out.falsettoHigh = r.falsettoHigh;
+  return out;
 }
 
 export function setManualVocalRange(range) {
-  saveLocal("vocal_range", range && range.high > range.low ? { low: range.low, high: range.high } : null);
+  if (!range || !(range.high > range.low)) {
+    saveLocal("vocal_range", null);
+    return;
+  }
+  const saved = { low: range.low, high: range.high };
+  if (Number.isFinite(range.falsettoHigh) && range.falsettoHigh > range.high) {
+    saved.falsettoHigh = range.falsettoHigh;
+  }
+  saveLocal("vocal_range", saved);
 }
 
 function median(values) {
@@ -293,7 +306,8 @@ export function rangeFit(sung, range) {
     const over = Math.max(0, high - range.high);
     const under = Math.max(0, range.low - low);
     const miss = over + under;
-    if (!best || miss < best.miss) best = { low, high, over, under, miss, octave: o };
+    const inFalsetto = over > 0 && Number.isFinite(range.falsettoHigh) && high <= range.falsettoHigh;
+    if (!best || miss < best.miss) best = { low, high, over, under, miss, octave: o, inFalsetto };
   }
   return best;
 }

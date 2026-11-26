@@ -30,33 +30,36 @@ export function renderChordDiagramSVG(chordName, { customDefines = {}, leftHande
 
   const frets = leftHanded ? [...voicing.frets].reverse() : voicing.frets;
   const baseFret = voicing.baseFret || 1;
-  const width = 76;
-  const height = 92;
-  const padX = 13;
-  const padTop = 22;
   const stringGap = 10;
   const fretGap = 14;
   const numStrings = 6;
-  const numFrets = 4;
+  const maxRelFret = Math.max(4, ...frets.filter((f) => f > 0));
+  const numFrets = Math.min(5, maxRelFret);
+  const padLeft = 26;
+  const padRight = 10;
+  const padTop = 20;
+  const padBottom = 10;
+  const width = padLeft + stringGap * 5 + padRight;
+  const height = padTop + numFrets * fretGap + padBottom;
 
   const lines = [];
   // Nut or top line
   if (baseFret === 1) {
-    lines.push(`<line x1="${padX - 1}" y1="${padTop}" x2="${padX + stringGap * 5 + 1}" y2="${padTop}" stroke="currentColor" stroke-width="3" />`);
+    lines.push(`<line x1="${padLeft - 1}" y1="${padTop}" x2="${padLeft + stringGap * 5 + 1}" y2="${padTop}" stroke="currentColor" stroke-width="3" />`);
   } else {
-    lines.push(`<line x1="${padX}" y1="${padTop}" x2="${padX + stringGap * 5}" y2="${padTop}" stroke="currentColor" stroke-width="1.2" />`);
-    lines.push(`<text x="${padX - 4}" y="${padTop + fretGap * 0.75}" font-size="9" text-anchor="end" fill="currentColor" font-family="IBM Plex Mono, monospace">${baseFret}fr</text>`);
+    lines.push(`<line x1="${padLeft}" y1="${padTop}" x2="${padLeft + stringGap * 5}" y2="${padTop}" stroke="currentColor" stroke-width="1.2" />`);
+    lines.push(`<text x="${padLeft - 4}" y="${padTop + fretGap * 0.72}" font-size="8.5" font-weight="600" text-anchor="end" fill="currentColor" font-family="IBM Plex Mono, monospace">${baseFret}fr</text>`);
   }
 
   // Fret lines
   for (let f = 1; f <= numFrets; f++) {
     const y = padTop + f * fretGap;
-    lines.push(`<line x1="${padX}" y1="${y}" x2="${padX + stringGap * 5}" y2="${y}" stroke="currentColor" stroke-opacity="0.35" stroke-width="1" />`);
+    lines.push(`<line x1="${padLeft}" y1="${y}" x2="${padLeft + stringGap * 5}" y2="${y}" stroke="currentColor" stroke-opacity="0.35" stroke-width="1" />`);
   }
 
   // String lines
   for (let s = 0; s < numStrings; s++) {
-    const x = padX + s * stringGap;
+    const x = padLeft + s * stringGap;
     lines.push(`<line x1="${x}" y1="${padTop}" x2="${x}" y2="${padTop + numFrets * fretGap}" stroke="currentColor" stroke-opacity="0.55" stroke-width="1" />`);
   }
 
@@ -65,16 +68,17 @@ export function renderChordDiagramSVG(chordName, { customDefines = {}, leftHande
     for (const b of voicing.barres) {
       const fromS = leftHanded ? 5 - b.to : b.from;
       const toS = leftHanded ? 5 - b.from : b.to;
-      const x1 = padX + Math.min(fromS, toS) * stringGap;
-      const x2 = padX + Math.max(fromS, toS) * stringGap;
-      const y = padTop + (b.fret - 0.5) * fretGap;
+      const x1 = padLeft + Math.min(fromS, toS) * stringGap;
+      const x2 = padLeft + Math.max(fromS, toS) * stringGap;
+      const clampedB = Math.min(numFrets, Math.max(1, b.fret));
+      const y = padTop + (clampedB - 0.5) * fretGap;
       lines.push(`<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="currentColor" stroke-width="6" stroke-linecap="round" />`);
     }
   }
 
   // Dots and open/muted markers
   for (let s = 0; s < numStrings; s++) {
-    const x = padX + s * stringGap;
+    const x = padLeft + s * stringGap;
     const f = frets[s];
     if (f < 0) {
       // Muted X
@@ -92,7 +96,7 @@ export function renderChordDiagramSVG(chordName, { customDefines = {}, leftHande
   return `
     <button type="button" class="chord-card" data-chord="${esc(chordName)}" title="Chord diagram: ${esc(chordName)}">
       <div class="chord-card-name">${esc(chordName)}</div>
-      <svg class="chord-svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" aria-label="${esc(chordName)} chord diagram">
+      <svg class="chord-svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" overflow="visible" aria-label="${esc(chordName)} chord diagram">
         ${lines.join("")}
       </svg>
     </button>
