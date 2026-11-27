@@ -120,28 +120,33 @@ ok("What's new lists this release first", REVISIONS[0]?.version === APP_VERSION 
 // Original recording and this sheet, side by side. Made-up songs; the numbers are what matter.
 const progression = (chords) => `{title: T}\n\n{start_of_verse}\n` +
   Array.from({ length: 3 }, () => chords.map((c) => `[${c}]la`).join(" ")).join("\n") + "\n{end_of_verse}";
-// A band tuned down a half step plays C#m shapes, so the recording sounds in Cm (G3–G4).
-// This sheet is in Am, standard tuning: 3 half steps lower.
-const ain = { id: "a1", title: "Half Step Song", key: "Am", capo: 0, chordpro: progression(["Am", "G", "F", "C"]), layout_prefs: {} };
-ain.layout_prefs.melody = m.melodyFromRecording(ain, { recording_key: "Cm", low: 55, high: 67, confidence: "high" });
+// A band tuned down a half step plays C#m shapes, so the recording sounds in Cm (D#3–G#4).
+// This sheet is in Am, standard tuning: 3 half steps lower (C3–F4).
+// The same Am sheet tuned down a half step sounds in G#m: 4 half steps lower (B2–E4).
+const ain = { id: "a1", title: "Half Step Song", key: "Am", capo: 0, chordpro: progression(["Am", "E", "F", "C"]), layout_prefs: {} };
+ain.layout_prefs.melody = m.melodyFromRecording(ain, { recording_key: "Cm", low: 51, high: 68, confidence: "high" });
 const ainSung = m.sungRange(ain);
 ok("The original recording is saved exactly as the AI gave it",
-   JSON.stringify(m.originalMelody(ain)) === JSON.stringify({ key: "Cm", low: 55, high: 67, source: "ai", confidence: "high" }), JSON.stringify(ain.layout_prefs.melody));
+   JSON.stringify(m.originalMelody(ain)) === JSON.stringify({ key: "Cm", low: 51, high: 68, source: "ai", confidence: "high" }), JSON.stringify(ain.layout_prefs.melody));
 ok("A sheet 3 half steps below the original sings 3 half steps lower",
-   ainSung.low === 52 && ainSung.high === 64 && m.shiftFromOriginal(ain) === -3, JSON.stringify({ ainSung, d: m.shiftFromOriginal(ain) }));
+   ainSung.low === 48 && ainSung.high === 65 && m.shiftFromOriginal(ain) === -3, JSON.stringify({ ainSung, d: m.shiftFromOriginal(ain) }));
+const ainHalf = { ...ain, tuning: "Eb Ab Db Gb Bb Eb" };
+const ainHalfSung = m.sungRange(ainHalf);
+ok("Am sheet tuned down a half step sings 4 half steps below Cm (B2-E4)",
+   ainHalfSung.low === 47 && ainHalfSung.high === 64 && m.shiftFromOriginal(ainHalf) === -4, JSON.stringify({ ainHalfSung, d: m.shiftFromOriginal(ainHalf) }));
 const same = { id: "a2", title: "Same", key: "F", capo: 2, chordpro: progression(["F", "C", "Dm", "Bb"]), layout_prefs: {} };
 same.layout_prefs.melody = m.melodyFromRecording(same, { recording_key: "G", low: 50, high: 64 });
 ok("A sheet that sounds in the original key (F shapes, capo 2 = G) sings the original notes",
    m.sungRange(same).low === 50 && m.sungRange(same).high === 64 && m.shiftFromOriginal(same) === 0);
 const half = { id: "a3", title: "Tuned Down", key: "C#m", capo: 0, tuning: "Eb Ab Db Gb Bb Eb", chordpro: progression(["C#m", "B", "A", "E"]), layout_prefs: {} };
-half.layout_prefs.melody = m.melodyFromRecording(half, { recording_key: "Cm", low: 55, high: 67 });
+half.layout_prefs.melody = m.melodyFromRecording(half, { recording_key: "Cm", low: 51, high: 68 });
 ok("C#m shapes tuned down a half step sound in Cm: the original notes, no shift",
-   m.sungRange(half).low === 55 && m.shiftFromOriginal(half) === 0, JSON.stringify(m.sungRange(half)));
+   m.sungRange(half).low === 51 && m.shiftFromOriginal(half) === 0, JSON.stringify(m.sungRange(half)));
 const moved = { ...ain, capo: 2, preferred_transpose: -1 };
 ok("Capo and transpose move this sheet's notes but never the original",
-   m.originalMelody(moved).low === 55 && m.sungRange(moved).low === 53 && m.shiftFromOriginal(moved) === -2);
+   m.originalMelody(moved).low === 51 && m.sungRange(moved).low === 49 && m.shiftFromOriginal(moved) === -2);
 const handSet = m.melodyFromSung(ain, 50, 62);
-ok("Setting this sheet's notes by hand keeps the original recording", handSet.source === "you" && handSet.original?.key === "Cm" && handSet.original.low === 55);
+ok("Setting this sheet's notes by hand keeps the original recording", handSet.source === "you" && handSet.original?.key === "Cm" && handSet.original.low === 51);
 
 // Old AI ranges (saved before originals were kept) get looked up again; yours never do.
 const oldAi = { id: "o1", title: "Old", key: "G", chordpro: progression(["G", "C", "D", "Em"]), layout_prefs: { melody: { low: 45, high: 62, key: "G", source: "ai", recording_key: "G" } } };

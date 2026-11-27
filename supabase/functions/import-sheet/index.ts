@@ -305,12 +305,14 @@ const MELODY_SCHEMA = {
         properties: {
           id: { type: "string", description: "The id given for this song" },
           known: { type: "boolean", description: "True only if you know this song's sung melody well enough to name its lowest and highest notes" },
-          recording_key: { type: ["string", "null"], description: "Key the recording sounds in (concert pitch, the same pitch as the notes), e.g. 'A', 'F#m', 'Bb'; for a half-step-down recording in C#m shapes this is 'Cm'" },
+          original_chords: { type: ["string", "null"], description: "Write this first. Main 2-4 chord progression of the original recording in concert pitch (after any half-step-down tuning or capo), e.g. 'Cm - G - Ab - Eb' for C#m shapes tuned down a half step." },
+          recording_tuning: { type: ["string", "null"], description: "Write this second. Original recording guitar tuning or capo, e.g. 'half step down (Eb)', 'capo 2', or 'standard'." },
+          recording_key: { type: ["string", "null"], description: "Tonic/home key the recording actually sounds in (concert pitch matching original_chords and low_note/high_note), e.g. 'Cm', 'A', 'F#m', 'Bb'. Minor if centered on a minor chord (like Cm for Cm - G - Ab - Eb), never a non-tonic chord like Ab." },
           low_note: { type: ["string", "null"], description: "Lowest note of the lead vocal melody in scientific pitch, where C4 is middle C, e.g. 'A2', 'F#3'" },
           high_note: { type: ["string", "null"], description: "Highest note of the lead vocal melody, e.g. 'E4', 'Bb4'" },
           confidence: { type: "string", enum: ["high", "medium", "low"] }
         },
-        required: ["id", "known", "recording_key", "low_note", "high_note", "confidence"]
+        required: ["id", "known", "original_chords", "recording_tuning", "recording_key", "low_note", "high_note", "confidence"]
       }
     }
   },
@@ -322,11 +324,17 @@ const MELODY_PROMPT = `You know the melodies of popular songs, hymns, and worshi
 - Use the best-known recording by the named artist. For a hymn, use the melody in its usual hymnal key.
 - Count the main melody the lead singer sings, including chorus peaks and a final chorus that goes up. Leave out brief ad-libs, shouts, spoken parts, and backing vocals.
 - Write notes in scientific pitch, where C4 is middle C. A man's melody usually sits between about G2 and A4, a woman's between about F3 and E5.
+- Write original_chords first in concert pitch, then derive recording_key from the tonic of original_chords — never from automated streaming-service key tags (which frequently mislabel a minor rock song like Cm - G - Ab - Eb as Ab instead of Cm).
+- When the sheet's chords are minor (for example Am - E - F - C), the original recording is in a minor key (the transposed equivalent in concert pitch, e.g. Cm).
 - The key and the notes must be in the same pitch: the key the recording actually sounds in (concert pitch), not the chord shapes a guitarist plays. A band tuned down a half step that plays C#m shapes sounds in Cm, so give Cm and the notes as heard. A capo works the same way: G shapes with a capo on 2 sound in A.
-- The sheet's key is a hint for which arrangement is meant; the notes are still the recording's.
+- The sheet's key and chords are hints for which arrangement is meant; the notes and recording_key are still the original recording's concert pitch.
 - If you don't know a song's melody well enough to name its notes, set known false and the notes null. Never guess from the title alone.`;
 
+// ==== MELODY KEY NET ====
 const NOTE_PITCH: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+const SHARP_MAJ = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
+const SHARP_MIN = ["Cm", "C#m", "Dm", "Ebm", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"];
+
 function noteToMidi(note: unknown): number | null {
   const m = String(note || "").trim().match(/^([A-Ga-g])([#b♯♭]?)(-?\d)$/);
   if (!m) return null;
@@ -334,18 +342,97 @@ function noteToMidi(note: unknown): number | null {
   return (Number(m[3]) + 1) * 12 + NOTE_PITCH[m[1].toUpperCase()] + acc;
 }
 function cleanKey(key: unknown): string | null {
-  const m = String(key || "").trim().match(/^([A-G])([#b]?)\s*(m|min|minor)?$/i);
-  return m ? m[1].toUpperCase() + m[2] + (m[3] ? "m" : "") : null;
+  const m = String(key || "").trim().match(/^([A-G])([#b♯♭]?)\s*(m|min|minor)?$/i);
+  if (!m) return null;
+  const acc = m[2] === "♯" ? "#" : m[2] === "♭" ? "b" : m[2];
+  return m[1].toUpperCase() + acc + (m[3] ? "m" : "");
+}
+function chordPitchAndQuality(tok: string): { pitch: number; minor: boolean } | null {
+  const clean = String(tok || "").trim().replace(/^[([{|]+|[)\]}|,.;:!]+$/g, "").replace(/\/[A-G][#b♯♭]?$/i, "");
+  const m = clean.match(/^([A-G])([#b♯♭]?)(.*)$/);
+  if (!m || !(m[1] in NOTE_PITCH)) return null;
+  const acc = m[2] === "#" || m[2] === "♯" ? 1 : m[2] === "b" || m[2] === "♭" ? -1 : 0;
+  const pitch = ((NOTE_PITCH[m[1]] + acc) % 12 + 12) % 12;
+  const minor = /^m(?!aj)|^min|^-/i.test(m[3] || "");
+  return { pitch, minor };
+}
+function parseKeyTonic(k: string | null): { pitch: number; minor: boolean } | null {
+  if (!k) return null;
+  const m = k.match(/^([A-G])([#b]?)(m?)$/);
+  if (!m || !(m[1] in NOTE_PITCH)) return null;
+  const acc = m[2] === "#" ? 1 : m[2] === "b" ? -1 : 0;
+  return { pitch: ((NOTE_PITCH[m[1]] + acc) % 12 + 12) % 12, minor: m[3] === "m" };
+}
+function transposeKeySimple(k: string, steps: number): string {
+  const parsed = parseKeyTonic(cleanKey(k));
+  if (!parsed) return k;
+  const nextPitch = ((parsed.pitch + steps) % 12 + 12) % 12;
+  return parsed.minor ? SHARP_MIN[nextPitch] : SHARP_MAJ[nextPitch];
+}
+function sameTonic(a: string | null, b: string | null): boolean {
+  const pa = parseKeyTonic(a);
+  const pb = parseKeyTonic(b);
+  return !!pa && !!pb && pa.pitch === pb.pitch && pa.minor === pb.minor;
+}
+function verifyRecordingKey(
+  aiKey: string,
+  originalChordsText: unknown,
+  recordingTuningText: unknown,
+  reqSong?: { key?: string; chords?: string[] }
+): string {
+  if (!reqSong?.key || !Array.isArray(reqSong.chords) || reqSong.chords.length < 3) return aiKey;
+  if (typeof originalChordsText !== "string" || !originalChordsText.trim()) return aiKey;
+  const sheetChords: Array<{ pitch: number; minor: boolean }> = [];
+  for (const ch of reqSong.chords) {
+    const pq = chordPitchAndQuality(ch);
+    if (pq) sheetChords.push(pq);
+  }
+  const origChords: Array<{ pitch: number; minor: boolean }> = [];
+  for (const tok of originalChordsText.trim().split(/[\s,|–—•]+/)) {
+    const pq = chordPitchAndQuality(tok);
+    if (pq) origChords.push(pq);
+  }
+  if (sheetChords.length < 3 || origChords.length < 3) return aiKey;
+
+  let bestShift = 0;
+  let bestScore = -1;
+  let secondBest = -1;
+  for (let s = 0; s < 12; s++) {
+    let score = 0;
+    for (const oc of origChords) {
+      if (sheetChords.some((sc) => ((sc.pitch + s) % 12 === oc.pitch) && sc.minor === oc.minor)) score++;
+    }
+    if (score > bestScore) {
+      secondBest = bestScore;
+      bestScore = score;
+      bestShift = s;
+    } else if (score > secondBest) {
+      secondBest = score;
+    }
+  }
+  if (bestScore < origChords.length * 0.75 || bestScore <= secondBest) return aiKey;
+
+  const inferredKey = transposeKeySimple(reqSong.key, bestShift);
+  const halfStepDown = /half[\s-]*step\s*down|\beb\b|d#|1\/2\s*step\s*down/i.test(String(recordingTuningText || ""));
+  if (halfStepDown && sameTonic(aiKey, transposeKeySimple(inferredKey, -1))) {
+    return aiKey;
+  }
+  if (!sameTonic(aiKey, inferredKey)) {
+    return inferredKey;
+  }
+  return aiKey;
 }
 // deno-lint-ignore no-explicit-any
-function melodyFromAi(item: any) {
+function melodyFromAi(item: any, reqSong?: { key?: string; chords?: string[] }) {
   if (!item || item.known !== true) return null;
   const low = noteToMidi(item.low_note);
   const high = noteToMidi(item.high_note);
-  const key = cleanKey(item.recording_key);
-  if (low == null || high == null || !key || low < 33 || high > 88 || high <= low || high - low > 30) return null;
+  const rawKey = cleanKey(item.recording_key);
+  if (low == null || high == null || !rawKey || low < 33 || high > 88 || high <= low || high - low > 30) return null;
+  const key = verifyRecordingKey(rawKey, item.original_chords, item.recording_tuning, reqSong);
   return { id: String(item.id), recording_key: key, low, high, confidence: ["high", "medium", "low"].includes(item.confidence) ? item.confidence : "low" };
 }
+// ==== END MELODY KEY NET ====
 
 const SYSTEM_PROMPT = `You turn guitar chord sheets into clean Chord Book sheets. People read them while playing guitar and singing, so every chord must sit on the right word and every line must read like the song. Always return your answer by calling the save_chord_sheet tool.
 
@@ -452,7 +539,11 @@ Deno.serve(async (req: Request) => {
         id: x.id.slice(0, 64),
         title: x.title.trim().slice(0, 120),
         artist: typeof x.artist === "string" ? x.artist.trim().slice(0, 120) : "",
-        key: cleanKey(x.key) || ""
+        key: cleanKey(x.key) || "",
+        chords: (Array.isArray(x.chords) ? x.chords : [])
+          .filter((c: unknown) => typeof c === "string" && isValidChordToken(c.trim()))
+          .map((c: string) => c.trim().slice(0, 16))
+          .slice(0, 8)
       }));
     if (!list.length) return json({ error: "No songs to look up." });
     if (!unlimited) {
@@ -487,8 +578,10 @@ Deno.serve(async (req: Request) => {
           tool_choice: { type: "auto" },
           messages: [{
             role: "user",
-            content: "Songs:\n" + list.map((x: { id: string; title: string; artist: string; key: string }) =>
-              `- id ${x.id}: "${x.title}"${x.artist ? ` by ${x.artist}` : ""}${x.key ? ` (sheet in ${x.key})` : ""}`).join("\n")
+            content: "Songs:\n" + list.map((x: { id: string; title: string; artist: string; key: string; chords: string[] }) => {
+              const hints = [x.key ? `sheet in ${x.key}` : "", x.chords.length ? `chords: ${x.chords.join(" - ")}` : ""].filter(Boolean);
+              return `- id ${x.id}: "${x.title}"${x.artist ? ` by ${x.artist}` : ""}${hints.length ? ` (${hints.join("; ")})` : ""}`;
+            }).join("\n")
           }]
         })
       });
@@ -508,10 +601,11 @@ Deno.serve(async (req: Request) => {
         await logAiCall(supabase, "cb_melody", MODEL_MELODY, false, ms, payload?.usage, userId);
         return json({ error: "The AI didn’t send the melody ranges back. Try again in a minute." });
       }
-      const ids = new Set(list.map((x: { id: string }) => x.id));
+      const byId = new Map(list.map((x: { id: string; key: string; chords: string[] }) => [x.id, x]));
       const melodies = (Array.isArray(tool?.input?.songs) ? tool.input.songs : [])
-        .map(melodyFromAi)
-        .filter((m: { id: string } | null) => m && ids.has(m.id));
+        // deno-lint-ignore no-explicit-any
+        .map((item: any) => melodyFromAi(item, byId.get(String(item?.id || ""))))
+        .filter((m: { id: string } | null) => m && byId.has(m.id));
       await logAiCall(supabase, "cb_melody", MODEL_MELODY, !!tool, ms, payload?.usage, userId);
       return json({ melodies, unknown: list.length - melodies.length, model: MODEL_MELODY });
     } catch (err) {

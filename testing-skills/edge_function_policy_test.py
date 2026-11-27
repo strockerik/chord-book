@@ -240,6 +240,12 @@ def main():
           and 'id: "repair_1"' not in index_src and "structuredClone(toolBlock.input)" in index_src)
     check("The melody lookup asks for the key the recording sounds in, the same pitch as its notes",
           "concert pitch" in index_src and "sounds in Cm" in index_src)
+    check("MELODY_SCHEMA grounds recording_key with original_chords & recording_tuning before recording_key",
+          all(k in index_src for k in ("original_chords:", "recording_tuning:", "recording_key:"))
+          and index_src.index("original_chords:") < index_src.index("recording_key:")
+          and index_src.index("recording_tuning:") < index_src.index("recording_key:")
+          and "// ==== MELODY KEY NET ====" in index_src
+          and "verifyRecordingKey(" in index_src)
     check("A melody reply without the tool call is an error, not every song unknown",
           "The AI didn’t send the melody ranges back" in index_src)
     bundle = subprocess.run([sys.executable, str(ROOT / "scripts" / "bundle_import_sheet.py"), "--check"], capture_output=True, text=True)
@@ -252,12 +258,15 @@ def main():
           'reqType === "text"' in index_src and 'reqType === "image"' in index_src
           and 'reqType === "pdf"' in index_src and 'type: "document"' in index_src)
 
-    # 2. Run real Chord Net + Layout + UG + PDF logic inside headless Chrome
+    # 2. Run real Chord Net + Layout + UG + PDF + Melody Key Net logic inside headless Chrome
+    melody_net_m = re.search(r"// ==== MELODY KEY NET ====([\s\S]*?)// ==== END MELODY KEY NET ====", index_src)
+    melody_net_src = melody_net_m.group(1) if melody_net_m else ""
     js_bundle = "\n".join([
         strip_ts(chord_net_src),
         strip_ts(layout_src),
         strip_ts(ug_src),
         strip_ts(pdf_src),
+        strip_ts(melody_net_src),
     ])
 
     page_html = f"""<!doctype html><meta charset="utf-8"><pre id="out"></pre><script>
@@ -412,6 +421,34 @@ const stacked = {{ text: "[D]Morning [A]road, [G]morning road, [D]morning road, 
 applyPlacementNotes([{{ lines: [stacked] }}]);
 ok("applyPlacementNotes moves repeated-word anchors to each next appearance",
    stacked.text === "Morning [D]road, morning [A]road, morning [G]road, morning [D]road", stacked.text);
+
+// --- Melody Key Net regression checks (Am sheet vs half-step-down Cm original) ---
+const saySheet = {{ key: "Am", chords: ["Am", "E", "F", "C"] }};
+const fixedAb = melodyFromAi({{
+  id: "1",
+  known: true,
+  original_chords: "Cm - G - Ab - Eb",
+  recording_tuning: "half step down (Eb)",
+  recording_key: "Ab",
+  low_note: "D#3",
+  high_note: "G#4",
+  confidence: "high"
+}}, saySheet);
+ok("Melody Key Net corrects Ab mislabel to Cm from original_chords progression",
+   !!fixedAb && fixedAb.recording_key === "Cm", JSON.stringify(fixedAb));
+
+const keepCm = melodyFromAi({{
+  id: "1",
+  known: true,
+  original_chords: "C#m - G# - A - E",
+  recording_tuning: "half step down (Eb)",
+  recording_key: "Cm",
+  low_note: "D#3",
+  high_note: "G#4",
+  confidence: "high"
+}}, saySheet);
+ok("Melody Key Net preserves Cm when original_chords are guitar shapes tuned half-step down",
+   !!keepCm && keepCm.recording_key === "Cm", JSON.stringify(keepCm));
 
 document.getElementById("out").textContent = JSON.stringify(R);
 </script>"""

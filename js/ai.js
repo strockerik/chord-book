@@ -499,9 +499,31 @@ function fileToBase64(file) {
 }
 
 /**
+ * Extract the main distinct chords from ChordPro (no lyrics sent) to ground melody key lookup.
+ */
+function sheetMainChords(chordpro, limit = 6) {
+  if (!chordpro) return [];
+  const parsed = parse(chordpro);
+  const seen = [];
+  for (const sec of parsed.sections || []) {
+    for (const line of sec.lines || []) {
+      for (const seg of line.segments || []) {
+        const ch = seg.chord && String(seg.chord).trim();
+        if (!ch || ch === "N.C." || ch === "NC") continue;
+        if (!seen.includes(ch)) {
+          seen.push(ch);
+          if (seen.length >= limit) return seen;
+        }
+      }
+    }
+  }
+  return seen;
+}
+
+/**
  * Ask the AI for each song's lowest and highest sung notes, from its best-known recording.
- * Only titles, artists, and keys are sent. Resolves to { melodies: [{ id, recording_key, low,
- * high, confidence }], unknownIds } or { error }.
+ * Only titles, artists, keys, and main chord names (never lyrics) are sent.
+ * Resolves to { melodies: [{ id, recording_key, low, high, confidence }], unknownIds } or { error }.
  */
 export async function lookUpMelodyRanges(songList) {
   const sb = getCloud();
@@ -509,7 +531,13 @@ export async function lookUpMelodyRanges(songList) {
   const melodies = [];
   const unknownIds = [];
   for (let i = 0; i < songList.length; i += 25) {
-    const batch = songList.slice(i, i + 25).map((s) => ({ id: s.id, title: s.title, artist: s.artist || "", key: s.key || "" }));
+    const batch = songList.slice(i, i + 25).map((s) => ({
+      id: s.id,
+      title: s.title,
+      artist: s.artist || "",
+      key: s.key || "",
+      chords: sheetMainChords(s.chordpro || "")
+    }));
     try {
       const { data, error } = await sb.functions.invoke("import-sheet", { body: { type: "melody", songs: batch } });
       if (error) return { error: await edgeErrorText(error), melodies, unknownIds };
