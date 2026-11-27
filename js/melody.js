@@ -297,10 +297,10 @@ export function getVocalRange(songs = []) {
 // ---------------------------------------------------------------------------
 // Fitting a song to your range
 // ---------------------------------------------------------------------------
-/** How far a sung range runs past yours, in its best octave. miss 0 = it fits. */
+/** How far a sung range runs past yours, in the original octave or an octave down (never up an octave). miss 0 = it fits. */
 export function rangeFit(sung, range) {
   let best = null;
-  for (const o of [0, -12, 12]) {
+  for (const o of [0, -12]) {
     const low = sung.low + o;
     const high = sung.high + o;
     const over = Math.max(0, high - range.high);

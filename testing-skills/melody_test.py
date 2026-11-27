@@ -52,6 +52,9 @@ const voice = { low: 45, high: 64 };
 ok("A melody inside your range fits", m.rangeFit({ low: 47, high: 62 }, voice).miss === 0);
 const her = m.rangeFit({ low: 57, high: 76 }, voice);
 ok("A woman's melody fits an octave down", her.miss === 0 && her.octave === -12, JSON.stringify(her));
+const noOctaveUp = m.rangeFit({ low: 49, high: 66 }, { low: 60, high: 77 });
+ok("Never shifts a melody an octave up even if the voice range sits higher",
+   noOctaveUp.octave === 0, JSON.stringify(noOctaveUp));
 const best = m.bestRangeShift({ low: 48, high: 67 }, voice, "C");
 ok("Three half steps too high moves down three", best.shift === -3 && best.fit.miss === 0, JSON.stringify(best));
 const roomy = m.bestRangeShift({ low: 48, high: 60 }, { low: 45, high: 64 }, "C");

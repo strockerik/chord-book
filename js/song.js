@@ -807,8 +807,8 @@ function refreshMelodyPickers() {
   const sung = sungRange(shown);
   const voice = getVocalRange(getLibrarySongsCallback ? getLibrarySongsCallback() : []);
   const fit = sung && voice ? rangeFit(sung, voice) : null;
-  const octHint = fit && fit.octave !== 0
-    ? ` Sung an octave ${fit.octave < 0 ? "down" : "up"}: ${rangeText(fit)}.`
+  const octHint = fit && fit.octave < 0
+    ? ` Sung an octave down: ${rangeText(fit)}.`
     : "";
   const inList = (m) => (m >= NOTE_LOWEST && m <= NOTE_HIGHEST ? String(m) : "");
   lowPick.value = sung ? inList(sung.low) : "";

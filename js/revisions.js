@@ -3,6 +3,9 @@
 // in js/core.js (testing-skills/melody_test.py checks it). Add a line here with every release.
 
 export const REVISIONS = [
+  { version: "0.7.6", date: "2026-11-27", notes: [
+    "Stopped shifting melodies an octave higher than the original recording (you can match in the original octave or an octave down for higher voices, never up an octave)."
+  ] },
   { version: "0.7.5", date: "2026-11-27", notes: [
     "More → Singing and tuning always shows the melody’s true notes in this key without jumping an octave; if your vocal range sits an octave away, that’s noted cleanly in the hint."
   ] },
