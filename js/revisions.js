@@ -3,6 +3,9 @@
 // in js/core.js (testing-skills/melody_test.py checks it). Add a line here with every release.
 
 export const REVISIONS = [
+  { version: "0.7.5", date: "2026-11-27", notes: [
+    "More → Singing and tuning always shows the melody’s true notes in this key without jumping an octave; if your vocal range sits an octave away, that’s noted cleanly in the hint."
+  ] },
   { version: "0.7.4", date: "2026-11-27", notes: [
     "Melody lookups now send the sheet’s main chords (no lyrics) and check the original recording’s chords against them, so a minor song like Say It Ain’t So isn’t misread as a major key like Ab instead of Cm."
   ] },

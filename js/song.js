@@ -797,16 +797,19 @@ function refreshSongToolbar(fitInfo = null) {
   if (viewState.isDirty) scheduleAutosave();
 }
 
-// Shows the melody as you'd sing it now, in the octave that suits your range.
+// Shows the true melody notes as written/sounding on this sheet; if your voice sits an octave away, note it in the hint.
 function refreshMelodyPickers() {
   const lowPick = document.getElementById("melody-low-select");
   const highPick = document.getElementById("melody-high-select");
   const hint = document.getElementById("melody-hint");
   if (!lowPick || !highPick || !activeSong) return;
   const shown = songAsShown();
-  let sung = sungRange(shown);
+  const sung = sungRange(shown);
   const voice = getVocalRange(getLibrarySongsCallback ? getLibrarySongsCallback() : []);
-  if (sung && voice) sung = { ...sung, ...rangeFit(sung, voice) };
+  const fit = sung && voice ? rangeFit(sung, voice) : null;
+  const octHint = fit && fit.octave !== 0
+    ? ` Sung an octave ${fit.octave < 0 ? "down" : "up"}: ${rangeText(fit)}.`
+    : "";
   const inList = (m) => (m >= NOTE_LOWEST && m <= NOTE_HIGHEST ? String(m) : "");
   lowPick.value = sung ? inList(sung.low) : "";
   highPick.value = sung ? inList(sung.high) : "";
@@ -819,8 +822,8 @@ function refreshMelodyPickers() {
     hint.textContent = !m
       ? `This sheet sounds in ${soundsIn}. Pick the lowest and highest notes you sing, or Look up asks the AI.`
       : m.source === "ai"
-        ? `This sheet sounds in ${soundsIn}. AI estimate${m.confidence === "low" ? " (unsure)" : ""}; change either note if it’s off.`
-        : `This sheet sounds in ${soundsIn}. Set by you.`;
+        ? `This sheet sounds in ${soundsIn}. AI estimate${m.confidence === "low" ? " (unsure)" : ""}; change either note if it’s off.${octHint}`
+        : `This sheet sounds in ${soundsIn}. Set by you.${octHint}`;
   }
 
   // The original recording, to check the AI against.
